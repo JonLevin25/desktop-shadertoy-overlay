@@ -1,0 +1,28 @@
+{
+  "name": "shadertoy-overlay",
+  "version": "0.1.0",
+  "description": "Transparent fullscreen overlay for Shadertoy shaders",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "build": "tsc && npm run copy-html",
+    "copy-html": "node scripts/copy-html.js",
+    "start": "npm run build && electron .",
+    "dev": "tsc --watch & electron .",
+    "package": "npm run build && electron-builder"
+  },
+  "keywords": [
+    "shadertoy",
+    "shader",
+    "overlay",
+    "webgl"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "electron": "^28.0.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {}
+}
+
