@@ -12,6 +12,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onToggleOverlay: (callback: (visible: boolean) => void) => {
     ipcRenderer.on('toggle-overlay', (_event, visible) => callback(visible));
   },
+  listShaderFiles: () => ipcRenderer.invoke('list-shader-files'),
+  readShaderFile: (filePath: string) => ipcRenderer.invoke('read-shader-file', filePath),
+  openShaderFileDialog: () => ipcRenderer.invoke('open-shader-file-dialog'),
+  onShaderFilesChanged: (callback: () => void) => {
+    ipcRenderer.on('shader-files-changed', () => callback());
+  },
 });
 
 // Type declaration for TypeScript
@@ -25,6 +31,10 @@ declare global {
       setShowInTaskbar: (show: boolean) => Promise<void>;
       getShowInTaskbar: () => Promise<boolean>;
       onToggleOverlay: (callback: (visible: boolean) => void) => void;
+      listShaderFiles: () => Promise<string[]>;
+      readShaderFile: (filePath: string) => Promise<string>;
+      openShaderFileDialog: () => Promise<string | null>;
+      onShaderFilesChanged: (callback: () => void) => void;
     };
   }
 }

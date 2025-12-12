@@ -196,7 +196,7 @@
   <div id="overlay-ui">
     <div class="overlay-header">
       <h1>Shadertoy Overlay</h1>
-      <p>Press Ctrl+Shift+S to toggle this overlay</p>
+      <p>Press Ctrl+` to toggle this overlay</p>
     </div>
 
     <div class="controls-section">
@@ -237,7 +237,11 @@
 
       <div class="input-group">
         <label>Load from Local File</label>
-        <input type="file" id="shader-file-input" accept=".glsl,.frag,.fragment">
+        <button class="button" id="load-file-btn" style="margin-bottom: 10px;">Browse Shader File...</button>
+        <input type="file" id="shader-file-input" accept=".glsl,.frag,.fragment" style="display: none;">
+        <p style="font-size: 12px; color: #aaa; margin-top: 5px;">
+          Shaders from the <code>shaders/</code> directory are automatically loaded and shown above
+        </p>
       </div>
     </div>
 
@@ -246,9 +250,8 @@
     </div>
   </div>
 
-  <div class="hint" id="hint">Press Ctrl+Shift+S to open overlay</div>
+  <div class="hint" id="hint"></div>
 
   <script src="renderer.js"></script>
 </body>
 </html>
-

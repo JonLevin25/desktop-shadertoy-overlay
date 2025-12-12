@@ -3,10 +3,12 @@ class ShaderRenderer {
   private gl: WebGL2RenderingContext | null = null;
   private program: WebGLProgram | null = null;
   private startTime: number = 0;
+  private lastFrameTime: number = 0;
   private animationFrameId: number = 0;
   private currentShader: string = '';
   private opacity: number = 1.0;
   private resolution: [number, number] = [1920, 1080];
+  private dummyTexture: WebGLTexture | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     console.log('ShaderRenderer: Initializing...', canvas);
@@ -42,6 +44,8 @@ class ShaderRenderer {
     console.log('ShaderRenderer: WebGL2 context created successfully');
     this.gl = gl;
     this.startTime = performance.now() / 1000.0;
+    this.lastFrameTime = this.startTime;
+    this.createDummyTextures();
 
     // Set up canvas
     this.resizeCanvas();
@@ -52,6 +56,27 @@ class ShaderRenderer {
     this.loadDefaultShader();
     console.log('ShaderRenderer: Starting render loop...');
     this.render();
+  }
+
+  private createDummyTextures() {
+    if (!this.gl) return;
+
+    // Create a 1x1 black texture for iChannel0-3 (when not used)
+    const gl = this.gl;
+    this.dummyTexture = gl.createTexture();
+    if (!this.dummyTexture) {
+      console.error('Failed to create dummy texture');
+      return;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.dummyTexture);
+    // Create a black pixel
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    gl.bindTexture(gl.TEXTURE_2D, null); // Unbind
+    console.log('Dummy textures created');
   }
 
   private resizeCanvas() {
@@ -84,7 +109,13 @@ class ShaderRenderer {
   }
 
   async loadShader(shaderCode: string, name: string = 'Custom Shader') {
-    if (!this.gl) return;
+    if (!this.gl) {
+      console.error('loadShader: WebGL context not available');
+      return false;
+    }
+
+    console.log('Loading shader:', name);
+    console.log('Shader code length:', shaderCode.length);
 
     // Wrap Shadertoy shader code in full shader program
     const fullShader = this.wrapShadertoyShader(shaderCode);
@@ -98,11 +129,15 @@ class ShaderRenderer {
       
       this.program = program;
       this.currentShader = shaderCode;
+      console.log('Shader compiled successfully');
       this.render();
       
       return true;
     } catch (error) {
       console.error('Shader compilation error:', error);
+      console.error('Shader name:', name);
+      // Log the first 500 chars of shader code for debugging
+      console.error('Shader code preview:', shaderCode.substring(0, 500));
       return false;
     }
   }
@@ -111,8 +146,14 @@ class ShaderRenderer {
     // Shadertoy uniforms
     const uniforms = `
       uniform float iTime;
+      uniform float iTimeDelta;
       uniform vec3 iResolution;
       uniform vec4 iMouse;
+      uniform sampler2D iChannel0;
+      uniform sampler2D iChannel1;
+      uniform sampler2D iChannel2;
+      uniform sampler2D iChannel3;
+      uniform vec3 iChannelResolution[4];
     `;
 
     // Vertex shader (simple fullscreen quad)
@@ -182,8 +223,17 @@ class ShaderRenderer {
 
     if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
       const info = this.gl.getShaderInfoLog(shader);
+      const shaderType = type === this.gl.VERTEX_SHADER ? 'VERTEX' : 'FRAGMENT';
+      console.error(`${shaderType} SHADER COMPILATION ERROR:`);
+      console.error('Info log:', info);
+      // Log shader source with line numbers for easier debugging
+      const lines = source.split('\n');
+      console.error('Shader source (first 50 lines):');
+      lines.slice(0, 50).forEach((line, i) => {
+        console.error(`${i + 1}: ${line}`);
+      });
       this.gl.deleteShader(shader);
-      throw new Error('Shader compilation error: ' + info);
+      throw new Error(`Shader compilation error (${shaderType}): ${info}`);
     }
 
     return shader;
@@ -203,7 +253,10 @@ class ShaderRenderer {
     if (!this.gl || !this.program) return;
 
     const gl = this.gl;
-    const time = performance.now() / 1000.0 - this.startTime;
+    const currentTime = performance.now() / 1000.0;
+    const time = currentTime - this.startTime;
+    const timeDelta = currentTime - this.lastFrameTime;
+    this.lastFrameTime = currentTime;
 
     // Set up fullscreen quad
     const positionBuffer = gl.createBuffer();
@@ -229,12 +282,20 @@ class ShaderRenderer {
 
     // Set uniforms
     const iTimeLocation = gl.getUniformLocation(this.program, 'iTime');
+    const iTimeDeltaLocation = gl.getUniformLocation(this.program, 'iTimeDelta');
     const iResolutionLocation = gl.getUniformLocation(this.program, 'iResolution');
     const iMouseLocation = gl.getUniformLocation(this.program, 'iMouse');
-    const iOpacityLocation = gl.getUniformLocation(this.program, 'iOpacity');
+    const iChannel0Location = gl.getUniformLocation(this.program, 'iChannel0');
+    const iChannel1Location = gl.getUniformLocation(this.program, 'iChannel1');
+    const iChannel2Location = gl.getUniformLocation(this.program, 'iChannel2');
+    const iChannel3Location = gl.getUniformLocation(this.program, 'iChannel3');
+    const iChannelResolutionLocation = gl.getUniformLocation(this.program, 'iChannelResolution');
 
     if (iTimeLocation !== null) {
       gl.uniform1f(iTimeLocation, time);
+    }
+    if (iTimeDeltaLocation !== null) {
+      gl.uniform1f(iTimeDeltaLocation, timeDelta);
     }
     if (iResolutionLocation !== null) {
       gl.uniform3f(iResolutionLocation, this.resolution[0], this.resolution[1], 1.0);
@@ -242,10 +303,46 @@ class ShaderRenderer {
     if (iMouseLocation !== null) {
       gl.uniform4f(iMouseLocation, 0, 0, 0, 0); // No mouse input for now
     }
-    // Don't use iOpacity uniform anymore - we use CSS opacity instead
-    // if (iOpacityLocation !== null) {
-    //   gl.uniform1f(iOpacityLocation, this.opacity);
-    // }
+    
+    // Bind dummy textures for iChannel0-3 (black texture)
+    // Only bind if the uniform exists (shader uses it)
+    if (this.dummyTexture) {
+      if (iChannel0Location !== null) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.dummyTexture);
+        gl.uniform1i(iChannel0Location, 0);
+      }
+      
+      if (iChannel1Location !== null) {
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, this.dummyTexture);
+        gl.uniform1i(iChannel1Location, 1);
+      }
+      
+      if (iChannel2Location !== null) {
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, this.dummyTexture);
+        gl.uniform1i(iChannel2Location, 2);
+      }
+      
+      if (iChannel3Location !== null) {
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D, this.dummyTexture);
+        gl.uniform1i(iChannel3Location, 3);
+      }
+    }
+    
+    // Set iChannelResolution array (all channels default to screen resolution)
+    // In WebGL, uniform arrays must be set element by element
+    if (iChannelResolutionLocation !== null) {
+      const res = [this.resolution[0], this.resolution[1], 1.0];
+      for (let i = 0; i < 4; i++) {
+        const location = gl.getUniformLocation(this.program, `iChannelResolution[${i}]`);
+        if (location !== null) {
+          gl.uniform3fv(location, res);
+        }
+      }
+    }
 
     // Clear with full transparency - critical for transparent windows
     // Must clear to transparent (0,0,0,0) so window compositor can see through
@@ -276,6 +373,9 @@ class ShaderRenderer {
     if (this.program && this.gl) {
       this.gl.deleteProgram(this.program);
     }
+    if (this.dummyTexture && this.gl) {
+      this.gl.deleteTexture(this.dummyTexture);
+    }
   }
 }
 
@@ -284,10 +384,22 @@ class ShaderManager {
   private shaders: Map<string, { code: string; name: string; source: 'local' | 'shadertoy' }> = new Map();
   private currentShaderId: string | null = null;
   private renderer: ShaderRenderer;
+  private onShaderListChanged: (() => void) | null = null;
 
   constructor(renderer: ShaderRenderer) {
     this.renderer = renderer;
     this.loadDefaultShaders();
+    // Load shaders from directory asynchronously after a short delay
+    // to ensure electronAPI is available
+    setTimeout(async () => {
+      console.log('Attempting to load shaders from directory...');
+      console.log('electronAPI available:', !!window.electronAPI);
+      console.log('listShaderFiles available:', !!(window.electronAPI && window.electronAPI.listShaderFiles));
+      await this.loadShadersFromDirectory();
+      this.setupShaderDirectoryWatcher();
+      console.log('Total shaders loaded:', this.shaders.size);
+      console.log('Shader IDs:', Array.from(this.shaders.keys()));
+    }, 500); // Increased delay to ensure electronAPI is ready
   }
 
   private loadDefaultShaders() {
@@ -316,6 +428,7 @@ class ShaderManager {
 
   addShader(id: string, code: string, name: string, source: 'local' | 'shadertoy') {
     this.shaders.set(id, { code, name, source });
+    this.notifyShaderListChanged();
   }
 
   async loadFromShadertoy(url: string): Promise<boolean> {
@@ -410,13 +523,124 @@ class ShaderManager {
     }
   }
 
-  selectShader(id: string) {
+  async loadFromFilePath(filePath: string): Promise<boolean> {
+    try {
+      if (window.electronAPI && window.electronAPI.readShaderFile) {
+        console.log('Loading shader from file path:', filePath);
+        const code = await window.electronAPI.readShaderFile(filePath);
+        console.log('Shader file read, length:', code.length, 'chars');
+        const fileName = filePath.split(/[/\\]/).pop() || 'shader';
+        const name = fileName.replace(/\.[^/.]+$/, '');
+        const id = `file-${filePath}`;
+        
+        console.log('Adding shader:', name, 'with ID:', id);
+        this.addShader(id, code, name, 'local');
+        console.log('Shader added successfully');
+        return true;
+      }
+      console.error('electronAPI.readShaderFile not available');
+      return false;
+    } catch (error) {
+      console.error('Failed to load file from path:', filePath, error);
+      return false;
+    }
+  }
+
+  private async loadShadersFromDirectory() {
+    if (!window.electronAPI) {
+      console.error('electronAPI not available, cannot load shaders from directory');
+      return;
+    }
+    
+    if (!window.electronAPI.listShaderFiles) {
+      console.error('listShaderFiles not available');
+      return;
+    }
+    
+    try {
+      console.log('Calling listShaderFiles...');
+      const shaderFiles = await window.electronAPI.listShaderFiles();
+      console.log('Found shader files:', shaderFiles);
+      const loadedPaths = new Set<string>();
+        
+        // Track which shaders are from directory
+        for (const [id, shader] of this.shaders.entries()) {
+          if (id.startsWith('file-') && !id.includes('shadertoy-')) {
+            // Check if this shader file still exists
+            const filePath = id.replace('file-', '');
+            if (!shaderFiles.includes(filePath)) {
+              // File was deleted, remove shader
+              this.shaders.delete(id);
+              if (this.currentShaderId === id) {
+                this.currentShaderId = null;
+              }
+            } else {
+              loadedPaths.add(filePath);
+            }
+          }
+        }
+        
+        // Load new shaders
+        let loadedNewShader = false;
+        console.log('Loading new shaders, found', shaderFiles.length, 'files');
+        for (const filePath of shaderFiles) {
+          if (!loadedPaths.has(filePath)) {
+            console.log('Loading shader from:', filePath);
+            const success = await this.loadFromFilePath(filePath);
+            console.log('Load result:', success);
+            if (success) {
+              loadedNewShader = true;
+            }
+          } else {
+            console.log('Shader already loaded:', filePath);
+          }
+        }
+        
+        // Remove deleted shaders
+        const removedShader = Array.from(this.shaders.keys()).some(id => {
+          if (id.startsWith('file-') && !id.includes('shadertoy-')) {
+            const filePath = id.replace('file-', '');
+            return !shaderFiles.includes(filePath);
+          }
+          return false;
+        });
+        
+        if (loadedNewShader || removedShader) {
+          this.notifyShaderListChanged();
+        }
+        
+        // Select first shader if none selected
+        if (!this.currentShaderId && this.shaders.size > 0) {
+          const firstShader = Array.from(this.shaders.keys())[0];
+          await this.selectShader(firstShader);
+        }
+    } catch (error) {
+      console.error('Failed to load shaders from directory:', error);
+    }
+  }
+
+  private setupShaderDirectoryWatcher() {
+    if (window.electronAPI && window.electronAPI.onShaderFilesChanged) {
+      window.electronAPI.onShaderFilesChanged(async () => {
+        // Reload shaders from directory when files change
+        await this.loadShadersFromDirectory();
+        // Trigger UI update
+        if (window.dispatchEvent) {
+          window.dispatchEvent(new CustomEvent('shader-list-updated'));
+        }
+      });
+    }
+  }
+
+  async selectShader(id: string) {
     const shader = this.shaders.get(id);
     if (shader) {
       this.currentShaderId = id;
-      this.renderer.loadShader(shader.code, shader.name);
-      return true;
+      const success = await this.renderer.loadShader(shader.code, shader.name);
+      this.notifyShaderListChanged();
+      return success;
     }
+    console.warn('Shader not found:', id);
     return false;
   }
 
@@ -430,6 +654,16 @@ class ShaderManager {
 
   getCurrentShaderId() {
     return this.currentShaderId;
+  }
+
+  setOnShaderListChanged(callback: () => void) {
+    this.onShaderListChanged = callback;
+  }
+
+  private notifyShaderListChanged() {
+    if (this.onShaderListChanged) {
+      this.onShaderListChanged();
+    }
   }
 }
 
@@ -445,6 +679,11 @@ class App {
     this.renderer = new ShaderRenderer(canvas);
     this.shaderManager = new ShaderManager(this.renderer);
     
+    // Set up callback to update UI when shader list changes
+    this.shaderManager.setOnShaderListChanged(() => {
+      this.updateShaderList();
+    });
+    
     this.setupUI();
     this.setupElectronIPC();
     this.loadWindowOptions();
@@ -452,6 +691,8 @@ class App {
     // Show hint initially, hide after 5 seconds
     const hint = document.getElementById('hint');
     if (hint) {
+      // Update hint text
+      hint.textContent = "Press Ctrl+` to open overlay";
       hint.classList.add('visible');
       setTimeout(() => {
         hint.classList.remove('visible');
@@ -461,7 +702,14 @@ class App {
 
   private async loadWindowOptions() {
     if (window.electronAPI) {
-      this.showInTaskbar = await window.electronAPI.getShowInTaskbar();
+      // Load saved taskbar preference
+      const savedTaskbar = localStorage.getItem('showInTaskbar');
+      if (savedTaskbar !== null) {
+        this.showInTaskbar = savedTaskbar === 'true';
+        await window.electronAPI.setShowInTaskbar(this.showInTaskbar);
+      } else {
+        this.showInTaskbar = await window.electronAPI.getShowInTaskbar();
+      }
       const checkbox = document.getElementById('show-in-taskbar-checkbox') as HTMLInputElement;
       if (checkbox) {
         checkbox.checked = this.showInTaskbar;
@@ -478,11 +726,23 @@ class App {
     const loadShadertoyBtn = document.getElementById('load-shadertoy-btn')!;
     const shaderFileInput = document.getElementById('shader-file-input') as HTMLInputElement;
 
+    // Load saved opacity
+    const savedOpacity = localStorage.getItem('opacity');
+    if (savedOpacity !== null) {
+      const opacity = parseFloat(savedOpacity);
+      opacitySlider.value = opacity.toString();
+      opacityValue.textContent = opacity + '%';
+      this.renderer.setOpacity(opacity);
+    }
+
     // Opacity control
     opacitySlider.addEventListener('input', (e) => {
       const value = (e.target as HTMLInputElement).value;
       opacityValue.textContent = value + '%';
-      this.renderer.setOpacity(parseFloat(value));
+      const opacityNum = parseFloat(value);
+      this.renderer.setOpacity(opacityNum);
+      // Save to localStorage
+      localStorage.setItem('opacity', opacityNum.toString());
     });
 
     // Show in taskbar checkbox
@@ -491,6 +751,8 @@ class App {
       showInTaskbarCheckbox.addEventListener('change', async (e) => {
         const checked = (e.target as HTMLInputElement).checked;
         this.showInTaskbar = checked;
+        // Save to localStorage
+        localStorage.setItem('showInTaskbar', checked.toString());
         if (window.electronAPI) {
           await window.electronAPI.setShowInTaskbar(checked);
         }
@@ -521,7 +783,7 @@ class App {
         // Auto-select the newly loaded shader
         const shaders = this.shaderManager.getShaders();
         const newShader = shaders[shaders.length - 1];
-        this.shaderManager.selectShader(newShader.id);
+        await this.shaderManager.selectShader(newShader.id);
         this.updateShaderList();
       } else {
         alert('Failed to load shader from Shadertoy. Make sure the URL is correct.');
@@ -530,7 +792,30 @@ class App {
       loadShadertoyBtn.textContent = 'Load Shader';
     });
 
-    // Load from file
+    // Load from file - use Electron dialog
+    const loadFileBtn = document.getElementById('load-file-btn');
+    if (loadFileBtn) {
+      loadFileBtn.addEventListener('click', async () => {
+        if (window.electronAPI && window.electronAPI.openShaderFileDialog) {
+          const filePath = await window.electronAPI.openShaderFileDialog();
+          if (filePath) {
+            const success = await this.shaderManager.loadFromFilePath(filePath);
+            if (success) {
+              this.updateShaderList();
+              // Auto-select the newly loaded shader
+              const shaders = this.shaderManager.getShaders();
+              const newShader = shaders[shaders.length - 1];
+              await this.shaderManager.selectShader(newShader.id);
+              this.updateShaderList();
+            } else {
+              alert('Failed to load shader file.');
+            }
+          }
+        }
+      });
+    }
+
+    // Also support direct file input for compatibility
     shaderFileInput.addEventListener('change', async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
@@ -541,7 +826,7 @@ class App {
         // Auto-select the newly loaded shader
         const shaders = this.shaderManager.getShaders();
         const newShader = shaders[shaders.length - 1];
-        this.shaderManager.selectShader(newShader.id);
+        await this.shaderManager.selectShader(newShader.id);
         this.updateShaderList();
       } else {
         alert('Failed to load shader file.');
@@ -552,6 +837,18 @@ class App {
 
     // Initial shader list update
     this.updateShaderList();
+
+    // Listen for shader list updates
+    window.addEventListener('shader-list-updated', () => {
+      this.updateShaderList();
+    });
+
+    // Periodically refresh shader list (fallback if events don't work)
+    setInterval(() => {
+      if (this.overlayVisible) {
+        this.updateShaderList();
+      }
+    }, 2000);
   }
 
   private updateShaderList() {
@@ -559,12 +856,16 @@ class App {
     const shaders = this.shaderManager.getShaders();
     const currentId = this.shaderManager.getCurrentShaderId();
 
+    console.log('Updating shader list UI. Shaders:', shaders.length, 'Current ID:', currentId);
+
     shaderList.innerHTML = shaders.map(({ id, name, source }) => {
       const isActive = id === currentId;
       const sourceBadge = source === 'shadertoy' ? '🌐' : '📁';
+      // Escape HTML in name to prevent XSS
+      const escapedName = name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       return `
         <div class="shader-item ${isActive ? 'active' : ''}" data-shader-id="${id}">
-          <h3>${sourceBadge} ${name}</h3>
+          <h3>${sourceBadge} ${escapedName}</h3>
           <p>${source === 'shadertoy' ? 'From Shadertoy' : 'Local file'}</p>
         </div>
       `;
@@ -572,11 +873,15 @@ class App {
 
     // Add click handlers
     shaderList.querySelectorAll('.shader-item').forEach((item) => {
-      item.addEventListener('click', () => {
+      item.addEventListener('click', async () => {
         const shaderId = (item as HTMLElement).dataset.shaderId;
         if (shaderId) {
-          this.shaderManager.selectShader(shaderId);
-          this.updateShaderList();
+          const success = await this.shaderManager.selectShader(shaderId);
+          if (success) {
+            this.updateShaderList();
+          } else {
+            console.error('Failed to select shader:', shaderId);
+          }
         }
       });
     });
