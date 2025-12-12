@@ -179,11 +179,13 @@ class ShaderRenderer {
       
       out vec4 fragColor;
       void main() {
-        vec4 color;
+        vec4 color = vec4(0.0, 0.0, 0.0, 1.0); // Initialize with alpha = 1.0
         mainImage(color, gl_FragCoord.xy);
-        // Don't modify alpha here - we'll use CSS opacity instead
-        // This works better with Electron's transparent windows on Windows
-        fragColor = color;
+        // Shadertoy shaders aren't designed to use alpha for transparency
+        // They render opaque images, so we always output alpha = 1.0
+        // The shader's alpha channel might be used for other purposes (depth, etc.)
+        // but for display purposes, we treat it as opaque
+        fragColor = vec4(color.rgb, 1.0);
       }
     `;
 
@@ -364,8 +366,10 @@ class ShaderRenderer {
 
     // Enable blending for proper alpha transparency
     gl.enable(gl.BLEND);
-    // Use standard alpha blending
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    // Shadertoy shaders render opaque images (alpha is not used for transparency)
+    // Use blend mode that treats shader output as opaque (alpha = 1.0)
+    // RGB: replace with shader color, Alpha: always write 1.0 (opaque)
+    gl.blendFuncSeparate(gl.ONE, gl.ZERO, gl.ONE, gl.ZERO);
     gl.blendEquation(gl.FUNC_ADD);
 
     // Draw
@@ -462,78 +466,97 @@ class ShaderManager {
 
   async loadFromShadertoy(url: string): Promise<boolean> {
     try {
-      // Extract shader ID from URL (supports various formats)
+      if (!window.electronAPI || !window.electronAPI.fetchShadertoyShader) {
+        throw new Error('fetchShadertoyShader not available');
+      }
+      
+      console.log('Fetching shader from Shadertoy:', url);
+      const result = await window.electronAPI.fetchShadertoyShader(url);
+      
+      if (!result || !result.code) {
+        throw new Error('Failed to extract shader code from Shadertoy');
+      }
+      
+      // Extract shader ID from URL for unique ID
       const match = url.match(/shadertoy\.com\/view\/([A-Za-z0-9]+)/);
-      if (!match) {
-        throw new Error('Invalid Shadertoy URL format. Expected: https://www.shadertoy.com/view/XXXXXX');
-      }
-
-      const shaderId = match[1];
+      const shaderId = match ? match[1] : Date.now().toString();
       
-      // Fetch shader page
-      // Note: Shadertoy doesn't have a public API, so we scrape the page
-      // This may fail due to CORS or page structure changes
-      const response = await fetch(`https://www.shadertoy.com/view/${shaderId}`, {
-        mode: 'cors',
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch shader: ${response.status} ${response.statusText}`);
-      }
-      
-      const html = await response.text();
-      
-      // Try multiple patterns to extract shader code
-      // Shadertoy embeds shader data in JSON within script tags
-      let shaderCode: string | null = null;
-      let shaderName: string = `Shadertoy ${shaderId}`;
-      
-      // Pattern 1: Look for JSON data in script tag
-      const jsonMatch = html.match(/<script[^>]*id="jsonData"[^>]*>(.*?)<\/script>/s);
-      if (jsonMatch) {
-        try {
-          const jsonData = JSON.parse(jsonMatch[1]);
-          if (jsonData.Shader && jsonData.Shader.renderpass && jsonData.Shader.renderpass[0]) {
-            shaderCode = jsonData.Shader.renderpass[0].code;
-            shaderName = jsonData.Shader.info?.name || shaderName;
-          }
-        } catch (e) {
-          console.warn('Failed to parse JSON data:', e);
-        }
-      }
-      
-      // Pattern 2: Fallback to regex extraction
-      if (!shaderCode) {
-        const codeMatch = html.match(/"code"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-        if (codeMatch) {
-          shaderCode = codeMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-        }
-      }
-      
-      // Pattern 3: Try to find shader code in various formats
-      if (!shaderCode) {
-        const altMatch = html.match(/code["\s]*:["\s]*"([^"]*(?:\\.[^"]*)*)"/);
-        if (altMatch) {
-          shaderCode = altMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-        }
-      }
-      
-      if (!shaderCode) {
-        throw new Error('Could not extract shader code from Shadertoy page. The page structure may have changed or the shader may be private.');
-      }
-      
-      // Extract shader name if not already found
-      if (shaderName === `Shadertoy ${shaderId}`) {
-        const nameMatch = html.match(/"name"\s*:\s*"([^"]+)"/);
-        if (nameMatch) {
-          shaderName = nameMatch[1];
-        }
-      }
-
-      this.addShader(`shadertoy-${shaderId}`, shaderCode, shaderName, 'shadertoy');
+      console.log('Shader loaded from Shadertoy:', result.name);
+      this.addShader(`shadertoy-${shaderId}`, result.code, result.name, 'shadertoy');
       return true;
     } catch (error) {
       console.error('Failed to load from Shadertoy:', error);
+      return false;
+    }
+  }
+  
+  async downloadShaderToFile(shaderId: string): Promise<boolean> {
+    try {
+      const shader = this.shaders.get(shaderId);
+      if (!shader) {
+        throw new Error('Shader not found');
+      }
+      
+      if (!window.electronAPI || !window.electronAPI.saveShaderFile) {
+        throw new Error('saveShaderFile not available');
+      }
+      
+      // Generate filename from shader name
+      const fileName = shader.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const filePath = await window.electronAPI.saveShaderFile(shader.code, fileName);
+      
+      console.log('Shader saved to:', filePath);
+      
+      // Reload shaders from directory to include the new file
+      await this.loadShadersFromDirectory();
+      
+      return true;
+    } catch (error) {
+      console.error('Failed to download shader:', error);
+      return false;
+    }
+  }
+  
+  async deleteShaderFile(shaderId: string): Promise<boolean> {
+    try {
+      const shader = this.shaders.get(shaderId);
+      if (!shader) {
+        throw new Error('Shader not found');
+      }
+      
+      // Only delete if it's a local file shader
+      if (!shaderId.startsWith('file-')) {
+        throw new Error('Can only delete local file shaders');
+      }
+      
+      const filePath = shaderId.replace('file-', '');
+      
+      if (!window.electronAPI || !window.electronAPI.deleteShaderFile) {
+        throw new Error('deleteShaderFile not available');
+      }
+      
+      const success = await window.electronAPI.deleteShaderFile(filePath);
+      
+      if (success) {
+        // Remove from shader list
+        this.shaders.delete(shaderId);
+        if (this.currentShaderId === shaderId) {
+          this.currentShaderId = null;
+          // Select another shader if available
+          if (this.shaders.size > 0) {
+            const firstShader = Array.from(this.shaders.keys())[0];
+            await this.selectShader(firstShader);
+          }
+        }
+        this.notifyShaderListChanged();
+        
+        // Reload shaders from directory to sync
+        await this.loadShadersFromDirectory();
+      }
+      
+      return success;
+    } catch (error) {
+      console.error('Failed to delete shader:', error);
       return false;
     }
   }
@@ -698,7 +721,12 @@ class ShaderManager {
       id,
       name: data.name,
       source: data.source,
+      code: data.code, // Include code for download functionality
     }));
+  }
+  
+  getShader(id: string) {
+    return this.shaders.get(id);
   }
 
   getCurrentShaderId() {
@@ -911,17 +939,29 @@ class App {
       const sourceBadge = source === 'shadertoy' ? '🌐' : '📁';
       // Escape HTML in name to prevent XSS
       const escapedName = name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const isLocalFile = id.startsWith('file-');
+      const isShadertoy = id.startsWith('shadertoy-');
+      
       return `
         <div class="shader-item ${isActive ? 'active' : ''}" data-shader-id="${id}">
+          <div class="shader-item-actions">
+            ${isShadertoy ? `<button class="shader-item-action download" data-shader-id="${id}" title="Download to local file">💾</button>` : ''}
+            ${isLocalFile ? `<button class="shader-item-action delete" data-shader-id="${id}" title="Delete shader">✕</button>` : ''}
+          </div>
           <h3>${sourceBadge} ${escapedName}</h3>
           <p>${source === 'shadertoy' ? 'From Shadertoy' : 'Local file'}</p>
         </div>
       `;
     }).join('');
 
-    // Add click handlers
+    // Add click handlers for selecting shader
     shaderList.querySelectorAll('.shader-item').forEach((item) => {
-      item.addEventListener('click', async () => {
+      item.addEventListener('click', async (e) => {
+        // Don't select if clicking on action buttons
+        if ((e.target as HTMLElement).closest('.shader-item-actions')) {
+          return;
+        }
+        
         const shaderId = (item as HTMLElement).dataset.shaderId;
         if (shaderId) {
           const success = await this.shaderManager.selectShader(shaderId);
@@ -929,6 +969,44 @@ class App {
             this.updateShaderList();
           } else {
             console.error('Failed to select shader:', shaderId);
+          }
+        }
+      });
+    });
+    
+    // Add download button handlers
+    shaderList.querySelectorAll('.shader-item-action.download').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const shaderId = (btn as HTMLElement).dataset.shaderId;
+        if (shaderId) {
+          const success = await this.shaderManager.downloadShaderToFile(shaderId);
+          if (success) {
+            alert('Shader downloaded successfully!');
+            this.updateShaderList();
+          } else {
+            alert('Failed to download shader.');
+          }
+        }
+      });
+    });
+    
+    // Add delete button handlers
+    shaderList.querySelectorAll('.shader-item-action.delete').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const shaderId = (btn as HTMLElement).dataset.shaderId;
+        if (shaderId) {
+          const shader = this.shaderManager.getShader(shaderId);
+          const shaderName = shader?.name || 'this shader';
+          
+          if (confirm(`Are you sure you want to delete "${shaderName}"?\n\nThis will permanently delete the shader file.`)) {
+            const success = await this.shaderManager.deleteShaderFile(shaderId);
+            if (success) {
+              this.updateShaderList();
+            } else {
+              alert('Failed to delete shader.');
+            }
           }
         }
       });

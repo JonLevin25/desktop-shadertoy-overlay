@@ -466,6 +466,193 @@ ipcMain.handle('read-shader-file', (_, filePath: string) => {
   }
 });
 
+// Fetch shader from Shadertoy (main process can bypass CORS)
+ipcMain.handle('fetch-shadertoy-shader', async (_, url: string) => {
+  try {
+    // Extract shader ID from URL
+    const match = url.match(/shadertoy\.com\/view\/([A-Za-z0-9]+)/);
+    if (!match) {
+      throw new Error('Invalid Shadertoy URL format');
+    }
+
+    const shaderId = match[1];
+    const shaderUrl = `https://www.shadertoy.com/view/${shaderId}`;
+    
+    console.log('Fetching Shadertoy shader:', shaderUrl);
+    
+    // Use Node.js https module to fetch (bypasses CORS)
+    const https = require('https');
+    
+    return new Promise((resolve, reject) => {
+      const options = {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      };
+      
+      https.get(shaderUrl, options, (res: any) => {
+        let html = '';
+        res.on('data', (chunk: Buffer) => {
+          html += chunk.toString();
+        });
+        res.on('end', () => {
+          try {
+            console.log('Received HTML, length:', html.length);
+            
+            // Try multiple patterns to extract shader code
+            let shaderCode: string | null = null;
+            let shaderName: string = `Shadertoy ${shaderId}`;
+            
+            // Pattern 1: Look for JSON data in script tag with id="jsonData"
+            const jsonMatch1 = html.match(/<script[^>]*id=["']jsonData["'][^>]*>(.*?)<\/script>/s);
+            if (jsonMatch1) {
+              try {
+                const jsonData = JSON.parse(jsonMatch1[1]);
+                console.log('Found jsonData script tag');
+                if (jsonData.Shader && jsonData.Shader.renderpass && jsonData.Shader.renderpass[0]) {
+                  shaderCode = jsonData.Shader.renderpass[0].code;
+                  shaderName = jsonData.Shader.info?.name || shaderName;
+                  if (shaderCode) {
+                    console.log('Extracted shader code from jsonData, length:', shaderCode.length);
+                  }
+                }
+              } catch (e) {
+                console.warn('Failed to parse jsonData:', e);
+              }
+            }
+            
+            // Pattern 2: Look for window.shadertoy JSON structure
+            if (!shaderCode) {
+              const jsonMatch2 = html.match(/window\.shadertoy\s*=\s*({.*?});/s);
+              if (jsonMatch2) {
+                try {
+                  const jsonData = JSON.parse(jsonMatch2[1]);
+                  console.log('Found window.shadertoy');
+                  if (jsonData.Shader && jsonData.Shader.renderpass && jsonData.Shader.renderpass[0]) {
+                    shaderCode = jsonData.Shader.renderpass[0].code;
+                    shaderName = jsonData.Shader.info?.name || shaderName;
+                    if (shaderCode) {
+                      console.log('Extracted shader code from window.shadertoy, length:', shaderCode.length);
+                    }
+                  }
+                } catch (e) {
+                  console.warn('Failed to parse window.shadertoy:', e);
+                }
+              }
+            }
+            
+            // Pattern 3: Look for var shaderData or const shaderData
+            if (!shaderCode) {
+              const jsonMatch3 = html.match(/(?:var|const|let)\s+shaderData\s*=\s*({.*?});/s);
+              if (jsonMatch3) {
+                try {
+                  const jsonData = JSON.parse(jsonMatch3[1]);
+                  console.log('Found shaderData variable');
+                  if (jsonData.Shader && jsonData.Shader.renderpass && jsonData.Shader.renderpass[0]) {
+                    shaderCode = jsonData.Shader.renderpass[0].code;
+                    shaderName = jsonData.Shader.info?.name || shaderName;
+                    if (shaderCode) {
+                      console.log('Extracted shader code from shaderData, length:', shaderCode.length);
+                    }
+                  }
+                } catch (e) {
+                  console.warn('Failed to parse shaderData:', e);
+                }
+              }
+            }
+            
+            // Pattern 4: Look for renderpass array directly in JSON
+            if (!shaderCode) {
+              const renderpassMatch = html.match(/"renderpass"\s*:\s*\[\s*\{[^}]*"code"\s*:\s*"((?:[^"\\]|\\.)*)"/s);
+              if (renderpassMatch) {
+                shaderCode = renderpassMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                console.log('Extracted shader code from renderpass match, length:', shaderCode.length);
+              }
+            }
+            
+            // Pattern 5: Fallback to simple code extraction
+            if (!shaderCode) {
+              // Try to find code in a renderpass object
+              const codeMatches = html.matchAll(/"code"\s*:\s*"((?:[^"\\]|\\.)*)"/g);
+              for (const match of codeMatches) {
+                const potentialCode = match[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                // Check if it looks like shader code (has mainImage or void main)
+                if (potentialCode.includes('mainImage') || potentialCode.includes('void main') || potentialCode.length > 100) {
+                  shaderCode = potentialCode;
+                  console.log('Extracted shader code from fallback pattern, length:', shaderCode.length);
+                  break;
+                }
+              }
+            }
+            
+            if (!shaderCode) {
+              // Log a sample of the HTML for debugging
+              console.error('Could not extract shader code. HTML sample (first 2000 chars):');
+              console.error(html.substring(0, 2000));
+              reject(new Error('Could not extract shader code from Shadertoy page. The page structure may have changed.'));
+              return;
+            }
+            
+            // Extract shader name if not already found
+            if (shaderName === `Shadertoy ${shaderId}`) {
+              const nameMatch = html.match(/"name"\s*:\s*"([^"]+)"/);
+              if (nameMatch) {
+                shaderName = nameMatch[1];
+              }
+            }
+            
+            console.log('Successfully extracted shader:', shaderName, 'Code length:', shaderCode.length);
+            resolve({ code: shaderCode, name: shaderName });
+          } catch (error) {
+            console.error('Error processing Shadertoy page:', error);
+            reject(error);
+          }
+        });
+      }).on('error', (error: Error) => {
+        console.error('Error fetching Shadertoy page:', error);
+        reject(error);
+      });
+    });
+  } catch (error) {
+    console.error('Error in fetch-shadertoy-shader:', error);
+    throw error;
+  }
+});
+
+// Save shader to file
+ipcMain.handle('save-shader-file', async (_, shaderCode: string, fileName: string) => {
+  try {
+    const shadersDir = getShadersDirectory();
+    if (!fs.existsSync(shadersDir)) {
+      fs.mkdirSync(shadersDir, { recursive: true });
+    }
+    
+    // Sanitize filename
+    const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_') + '.glsl';
+    const filePath = path.join(shadersDir, sanitizedFileName);
+    
+    fs.writeFileSync(filePath, shaderCode, 'utf-8');
+    return filePath;
+  } catch (error) {
+    console.error('Failed to save shader file:', error);
+    throw error;
+  }
+});
+
+// Delete shader file
+ipcMain.handle('delete-shader-file', async (_, filePath: string) => {
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error('Failed to delete shader file:', error);
+    throw error;
+  }
+});
+
 // Open file dialog for shader files
 ipcMain.handle('open-shader-file-dialog', async () => {
   if (!mainWindow) return null;

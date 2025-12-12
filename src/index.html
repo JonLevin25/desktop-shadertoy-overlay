@@ -87,6 +87,42 @@
       padding: 15px;
       cursor: pointer;
       transition: all 0.2s;
+      position: relative;
+    }
+    
+    .shader-item-actions {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      gap: 5px;
+    }
+    
+    .shader-item-action {
+      background: rgba(255, 255, 255, 0.2);
+      border: none;
+      border-radius: 4px;
+      width: 24px;
+      height: 24px;
+      cursor: pointer;
+      color: white;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s;
+    }
+    
+    .shader-item-action:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+    
+    .shader-item-action.delete {
+      color: #ff6b6b;
+    }
+    
+    .shader-item-action.delete:hover {
+      background: rgba(255, 107, 107, 0.3);
     }
 
     .shader-item:hover {
