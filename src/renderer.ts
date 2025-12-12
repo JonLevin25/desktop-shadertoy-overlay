@@ -159,26 +159,31 @@ class ShaderRenderer {
     `;
 
     // Vertex shader (simple fullscreen quad)
-    const vertexShader = `
-      attribute vec2 a_position;
+    // Use #version 300 es for GLSL ES 3.00 (WebGL2) - required for tanh vector support
+    // Shadertoy uses GLSL ES 3.00, so we need to match that version
+    const vertexShader = `#version 300 es
+      in vec2 a_position;
       void main() {
         gl_Position = vec4(a_position, 0.0, 1.0);
       }
     `;
 
-    // Fragment shader wrapper - apply opacity to alpha channel
-    const fragmentShader = `
+    // Fragment shader wrapper
+    // Use #version 300 es for GLSL ES 3.00 (WebGL2) - this enables tanh for vectors
+    // Without #version 300 es, GLSL defaults to ES 1.00 which doesn't have tanh at all
+    const fragmentShader = `#version 300 es
       precision highp float;
       ${uniforms}
       
       ${shaderCode}
       
+      out vec4 fragColor;
       void main() {
         vec4 color;
         mainImage(color, gl_FragCoord.xy);
         // Don't modify alpha here - we'll use CSS opacity instead
         // This works better with Electron's transparent windows on Windows
-        gl_FragColor = color;
+        fragColor = color;
       }
     `;
 
@@ -278,11 +283,14 @@ class ShaderRenderer {
     // Use shader program
     gl.useProgram(this.program);
 
-    // Set up attributes
+    // Set up attributes (GLSL ES 3.00 uses 'in' instead of 'attribute', but getAttribLocation still works)
     const positionLocation = gl.getAttribLocation(this.program, 'a_position');
     gl.enableVertexAttribArray(positionLocation);
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+    
+    // Set up output (GLSL ES 3.00 uses 'out' instead of gl_FragColor)
+    // We use fragColor as the output variable name
 
     // Set uniforms
     const iTimeLocation = gl.getUniformLocation(this.program, 'iTime');
@@ -395,15 +403,32 @@ class ShaderManager {
     this.loadDefaultShaders();
     // Load shaders from directory asynchronously after a short delay
     // to ensure electronAPI is available
-    setTimeout(async () => {
-      console.log('Attempting to load shaders from directory...');
-      console.log('electronAPI available:', !!window.electronAPI);
-      console.log('listShaderFiles available:', !!(window.electronAPI && window.electronAPI.listShaderFiles));
-      await this.loadShadersFromDirectory();
-      this.setupShaderDirectoryWatcher();
-      console.log('Total shaders loaded:', this.shaders.size);
-      console.log('Shader IDs:', Array.from(this.shaders.keys()));
-    }, 500); // Increased delay to ensure electronAPI is ready
+    this.waitForElectronAPI();
+  }
+  
+  private async waitForElectronAPI() {
+    // Wait for electronAPI to be available
+    let attempts = 0;
+    const maxAttempts = 50; // 5 seconds max wait
+    
+    while (!window.electronAPI && attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      attempts++;
+    }
+    
+    if (!window.electronAPI) {
+      console.error('electronAPI not available after waiting');
+      return;
+    }
+    
+    console.log('Attempting to load shaders from directory...');
+    console.log('electronAPI available:', !!window.electronAPI);
+    console.log('listShaderFiles available:', !!(window.electronAPI && window.electronAPI.listShaderFiles));
+    
+    await this.loadShadersFromDirectory();
+    this.setupShaderDirectoryWatcher();
+    console.log('Total shaders loaded:', this.shaders.size);
+    console.log('Shader IDs:', Array.from(this.shaders.keys()));
   }
 
   private loadDefaultShaders() {
@@ -529,21 +554,40 @@ class ShaderManager {
 
   async loadFromFilePath(filePath: string): Promise<boolean> {
     try {
-      if (window.electronAPI && window.electronAPI.readShaderFile) {
-        console.log('Loading shader from file path:', filePath);
-        const code = await window.electronAPI.readShaderFile(filePath);
-        console.log('Shader file read, length:', code.length, 'chars');
-        const fileName = filePath.split(/[/\\]/).pop() || 'shader';
-        const name = fileName.replace(/\.[^/.]+$/, '');
-        const id = `file-${filePath}`;
-        
-        console.log('Adding shader:', name, 'with ID:', id);
-        this.addShader(id, code, name, 'local');
-        console.log('Shader added successfully');
-        return true;
+      if (!window.electronAPI) {
+        console.error('electronAPI not available');
+        return false;
       }
-      console.error('electronAPI.readShaderFile not available');
-      return false;
+      
+      if (!window.electronAPI.readShaderFile) {
+        console.error('readShaderFile not available');
+        return false;
+      }
+      
+      console.log('Loading shader from file path:', filePath);
+      const code = await window.electronAPI.readShaderFile(filePath);
+      console.log('Shader file read, length:', code.length, 'chars');
+      
+      if (!code || code.length === 0) {
+        console.error('Shader file is empty');
+        return false;
+      }
+      
+      const fileName = filePath.split(/[/\\]/).pop() || 'shader';
+      const name = fileName.replace(/\.[^/.]+$/, '');
+      const id = `file-${filePath}`;
+      
+      console.log('Adding shader:', name, 'with ID:', id);
+      this.addShader(id, code, name, 'local');
+      console.log('Shader added successfully, total shaders:', this.shaders.size);
+      
+      // Auto-select if this is the first shader loaded
+      if (this.shaders.size === 1 && !this.currentShaderId) {
+        console.log('Auto-selecting first shader:', id);
+        await this.selectShader(id);
+      }
+      
+      return true;
     } catch (error) {
       console.error('Failed to load file from path:', filePath, error);
       return false;
@@ -616,6 +660,7 @@ class ShaderManager {
         // Select first shader if none selected
         if (!this.currentShaderId && this.shaders.size > 0) {
           const firstShader = Array.from(this.shaders.keys())[0];
+          console.log('Auto-selecting first available shader:', firstShader);
           await this.selectShader(firstShader);
         }
     } catch (error) {

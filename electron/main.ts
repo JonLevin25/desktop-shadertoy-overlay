@@ -56,6 +56,39 @@ function createWindow() {
   // Set clickthrough initially
   mainWindow.setIgnoreMouseEvents(true, { forward: true });
   isClickthrough = true;
+  
+  // Handle window focus/blur to toggle clickthrough and devtools
+  mainWindow.on('focus', () => {
+    // When window is focused, disable clickthrough so user can interact
+    if (isClickthrough && !overlayVisible) {
+      isClickthrough = false;
+      mainWindow?.setIgnoreMouseEvents(false);
+      console.log('Window focused, clickthrough disabled');
+    }
+  });
+  
+  mainWindow.on('blur', () => {
+    // When window loses focus, enable clickthrough unless overlay is visible
+    if (!overlayVisible && !isClickthrough) {
+      isClickthrough = true;
+      mainWindow?.setIgnoreMouseEvents(true, { forward: true });
+      console.log('Window blurred, clickthrough enabled');
+    }
+  });
+  
+  // Register F12 to toggle DevTools (only works when window is focused)
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'F12') {
+      event.preventDefault();
+      if (mainWindow) {
+        if (mainWindow.webContents.isDevToolsOpened()) {
+          mainWindow.webContents.closeDevTools();
+        } else {
+          mainWindow.webContents.openDevTools();
+        }
+      }
+    }
+  });
 
   // Load the renderer (HTML is copied to dist/src/ during build)
   // __dirname is dist/electron, so we go up one level to dist/, then into src/
@@ -138,6 +171,31 @@ function registerGlobalShortcut() {
   } else {
     console.log('Global shortcut registered:', shortcut);
   }
+  
+  // Register Ctrl+Shift+D to focus window and toggle clickthrough (D for DevTools/debug)
+  const focusShortcut = process.platform === 'darwin' ? 'Command+Shift+D' : 'Ctrl+Shift+D';
+  const focusRet = globalShortcut.register(focusShortcut, () => {
+    if (mainWindow) {
+      if (isClickthrough) {
+        // Focus window and disable clickthrough
+        mainWindow.setIgnoreMouseEvents(false);
+        isClickthrough = false;
+        mainWindow.focus();
+        console.log('Window focused, clickthrough disabled');
+      } else {
+        // Enable clickthrough and blur
+        mainWindow.setIgnoreMouseEvents(true, { forward: true });
+        isClickthrough = true;
+        console.log('Clickthrough enabled, window blurred');
+      }
+    }
+  });
+  
+  if (!focusRet) {
+    console.log('Focus shortcut registration failed for:', focusShortcut);
+  } else {
+    console.log('Focus shortcut registered:', focusShortcut);
+  }
 }
 
 function toggleOverlay() {
@@ -153,6 +211,11 @@ function toggleOverlay() {
     // When overlay UI is hidden, enable clickthrough so clicks pass through
     isClickthrough = !overlayVisible;
     mainWindow.setIgnoreMouseEvents(isClickthrough, { forward: true });
+    
+    // Focus window when overlay is shown so F12 works
+    if (overlayVisible) {
+      mainWindow.focus();
+    }
     
     // When overlay UI is visible, ensure window is at full opacity so UI is readable
     // When hidden, opacity is controlled by canvas CSS opacity
