@@ -8,6 +8,18 @@ let tray: Tray | null = null;
 let appIsQuitting = false;
 let showInTaskbar = false; // Whether window appears in taskbar/alt-tab
 let isClickthrough = true; // Track clickthrough state
+let testShaderPath: string | null = null; // Shader to load for testing
+
+// Parse command line arguments
+const args = process.argv.slice(2);
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--shader' || args[i] === '-s') {
+    if (i + 1 < args.length) {
+      testShaderPath = args[i + 1];
+      console.log('CLI: Will load test shader:', testShaderPath);
+    }
+  }
+}
 
 function createWindow() {
   // Get primary display dimensions
@@ -49,8 +61,35 @@ function createWindow() {
   // __dirname is dist/electron, so we go up one level to dist/, then into src/
   mainWindow.loadFile(path.join(__dirname, '../src/index.html'));
 
-  // DevTools closed by default - can be opened with Ctrl+Shift+I if needed
-  // mainWindow.webContents.openDevTools();
+  // Open DevTools if testing a shader
+  if (testShaderPath) {
+    mainWindow.webContents.openDevTools();
+    console.log('CLI: DevTools opened for testing');
+  }
+  
+  // When page loads, send test shader path if provided
+  mainWindow.webContents.once('did-finish-load', () => {
+    if (testShaderPath && mainWindow) {
+      // Resolve relative paths to absolute
+      let resolvedPath = testShaderPath;
+      if (!path.isAbsolute(testShaderPath)) {
+        // If relative, resolve from project root
+        const projectRoot = app.isPackaged 
+          ? path.join(__dirname, '../../')
+          : path.join(__dirname, '../../');
+        resolvedPath = path.resolve(projectRoot, testShaderPath);
+      }
+      console.log('CLI: Original path:', testShaderPath);
+      console.log('CLI: Resolved path:', resolvedPath);
+      console.log('CLI: File exists:', fs.existsSync(resolvedPath));
+      if (fs.existsSync(resolvedPath)) {
+        console.log('CLI: Sending test shader path to renderer:', resolvedPath);
+        mainWindow.webContents.send('load-test-shader', resolvedPath);
+      } else {
+        console.error('CLI: Shader file not found:', resolvedPath);
+      }
+    }
+  });
   
   // Log any errors
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
@@ -255,7 +294,13 @@ ipcMain.handle('exit-app', () => {
 });
 
 ipcMain.handle('set-show-in-taskbar', (_, show: boolean) => {
+  // Prevent infinite loop - if already set to this value, don't recreate
+  if (showInTaskbar === show && mainWindow) {
+    return;
+  }
+  
   showInTaskbar = show;
+  savePreferences(); // Save the preference
   if (mainWindow) {
     // On Windows, setSkipTaskbar() doesn't always work reliably
     // We need to recreate the window with the correct setting
@@ -264,6 +309,7 @@ ipcMain.handle('set-show-in-taskbar', (_, show: boolean) => {
     
     // Store current state
     const currentClickthrough = isClickthrough;
+    const currentOverlayVisible = overlayVisible;
     
     // Close the old window
     mainWindow.removeAllListeners('close');
@@ -282,7 +328,13 @@ ipcMain.handle('set-show-in-taskbar', (_, show: boolean) => {
         }
         restoredWindow.setOpacity(currentOpacity);
         isClickthrough = currentClickthrough;
+        overlayVisible = currentOverlayVisible;
         restoredWindow.setIgnoreMouseEvents(isClickthrough, { forward: true });
+        
+        // Restore overlay visibility state
+        if (currentOverlayVisible) {
+          restoredWindow.webContents.send('toggle-overlay', true);
+        }
         
         // Set up close handler based on taskbar setting
         restoredWindow.removeAllListeners('close');
@@ -399,8 +451,45 @@ function setupShaderWatcher() {
   });
 }
 
+// Load saved preferences before creating window
+function loadSavedPreferences() {
+  try {
+    // Read localStorage data from userData directory
+    // Electron stores localStorage in: userData/Local Storage/leveldb/
+    // We'll use a simpler approach - read from a JSON file in userData
+    const userDataPath = app.getPath('userData');
+    const prefsPath = path.join(userDataPath, 'preferences.json');
+    
+    if (fs.existsSync(prefsPath)) {
+      const prefsData = fs.readFileSync(prefsPath, 'utf-8');
+      const prefs = JSON.parse(prefsData);
+      if (prefs.showInTaskbar !== undefined) {
+        showInTaskbar = prefs.showInTaskbar === true;
+        console.log('Loaded saved preference - showInTaskbar:', showInTaskbar);
+      }
+    }
+  } catch (error) {
+    console.log('Could not load saved preferences:', error);
+  }
+}
+
+// Save preferences
+function savePreferences() {
+  try {
+    const userDataPath = app.getPath('userData');
+    const prefsPath = path.join(userDataPath, 'preferences.json');
+    const prefs = {
+      showInTaskbar: showInTaskbar
+    };
+    fs.writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+  } catch (error) {
+    console.error('Could not save preferences:', error);
+  }
+}
+
 // Setup watcher when app is ready
 app.whenReady().then(() => {
+  loadSavedPreferences();
   createWindow();
   registerGlobalShortcut();
   createTray();

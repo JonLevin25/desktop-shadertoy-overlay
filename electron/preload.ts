@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onShaderFilesChanged: (callback: () => void) => {
     ipcRenderer.on('shader-files-changed', () => callback());
   },
+  onLoadTestShader: (callback: (filePath: string) => void) => {
+    ipcRenderer.on('load-test-shader', (_event, filePath) => callback(filePath));
+  },
 });
 
 // Type declaration for TypeScript
@@ -35,6 +38,7 @@ declare global {
       readShaderFile: (filePath: string) => Promise<string>;
       openShaderFileDialog: () => Promise<string | null>;
       onShaderFilesChanged: (callback: () => void) => void;
+      onLoadTestShader: (callback: (filePath: string) => void) => void;
     };
   }
 }

@@ -8,6 +8,7 @@
     "copy-html": "node scripts/copy-html.js",
     "copy-shaders": "node scripts/copy-shaders.js",
     "start": "npm run build && electron .",
+    "test-shader": "npm run build && electron . --shader",
     "dev": "tsc --watch & electron .",
     "package": "npm run build && electron-builder"
   },

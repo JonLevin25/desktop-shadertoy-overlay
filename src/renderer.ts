@@ -110,7 +110,8 @@ class ShaderRenderer {
 
   async loadShader(shaderCode: string, name: string = 'Custom Shader') {
     if (!this.gl) {
-      console.error('loadShader: WebGL context not available');
+      const error = 'loadShader: WebGL context not available';
+      console.error(error);
       return false;
     }
 
@@ -134,7 +135,8 @@ class ShaderRenderer {
       
       return true;
     } catch (error) {
-      console.error('Shader compilation error:', error);
+      const errorMsg = `Shader compilation error: ${error}`;
+      console.error(errorMsg);
       console.error('Shader name:', name);
       // Log the first 500 chars of shader code for debugging
       console.error('Shader code preview:', shaderCode.substring(0, 500));
@@ -224,14 +226,16 @@ class ShaderRenderer {
     if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
       const info = this.gl.getShaderInfoLog(shader);
       const shaderType = type === this.gl.VERTEX_SHADER ? 'VERTEX' : 'FRAGMENT';
-      console.error(`${shaderType} SHADER COMPILATION ERROR:`);
-      console.error('Info log:', info);
+      const errorMsg = `${shaderType} SHADER COMPILATION ERROR: ${info}`;
+      console.error(errorMsg);
+      
       // Log shader source with line numbers for easier debugging
       const lines = source.split('\n');
       console.error('Shader source (first 50 lines):');
       lines.slice(0, 50).forEach((line, i) => {
         console.error(`${i + 1}: ${line}`);
       });
+      
       this.gl.deleteShader(shader);
       throw new Error(`Shader compilation error (${shaderType}): ${info}`);
     }
@@ -702,14 +706,13 @@ class App {
 
   private async loadWindowOptions() {
     if (window.electronAPI) {
-      // Load saved taskbar preference
-      const savedTaskbar = localStorage.getItem('showInTaskbar');
-      if (savedTaskbar !== null) {
-        this.showInTaskbar = savedTaskbar === 'true';
-        await window.electronAPI.setShowInTaskbar(this.showInTaskbar);
-      } else {
-        this.showInTaskbar = await window.electronAPI.getShowInTaskbar();
-      }
+      // Get the actual current state from main process (which loads from saved preferences)
+      this.showInTaskbar = await window.electronAPI.getShowInTaskbar();
+      
+      // Sync localStorage with the actual state
+      localStorage.setItem('showInTaskbar', this.showInTaskbar.toString());
+      
+      // Update checkbox to match
       const checkbox = document.getElementById('show-in-taskbar-checkbox') as HTMLInputElement;
       if (checkbox) {
         checkbox.checked = this.showInTaskbar;
@@ -892,6 +895,32 @@ class App {
       window.electronAPI.onToggleOverlay((visible: boolean) => {
         this.toggleOverlay(visible);
       });
+      
+      // Handle test shader loading from CLI
+      if (window.electronAPI.onLoadTestShader) {
+        window.electronAPI.onLoadTestShader(async (filePath: string) => {
+          console.log('CLI: Received test shader path:', filePath);
+          console.log('CLI: Loading shader...');
+          const success = await this.shaderManager.loadFromFilePath(filePath);
+          if (success) {
+            console.log('CLI: Shader loaded successfully');
+            const shaders = this.shaderManager.getShaders();
+            const testShader = shaders.find(s => s.id === `file-${filePath}`);
+            if (testShader) {
+              console.log('CLI: Selecting shader:', testShader.id);
+              await this.shaderManager.selectShader(testShader.id);
+              this.updateShaderList();
+              // Show overlay so user can see it
+              this.toggleOverlay(true);
+              console.log('CLI: Shader selected and overlay shown');
+            } else {
+              console.error('CLI: Shader not found in list after loading');
+            }
+          } else {
+            console.error('CLI: Failed to load shader from:', filePath);
+          }
+        });
+      }
     }
   }
 
