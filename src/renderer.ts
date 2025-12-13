@@ -842,7 +842,7 @@ class App {
   private renderer: ShaderRenderer;
   private shaderManager: ShaderManager;
   private overlayVisible = false;
-  private showInTaskbar = false;
+  private showWindowInTaskbar = false;
 
   constructor() {
     const canvas = document.getElementById('canvas') as HTMLCanvasElement;
@@ -872,16 +872,16 @@ class App {
 
   private async loadWindowOptions() {
     if (window.electronAPI) {
-      // Get the actual current state from main process (which loads from saved preferences)
-      this.showInTaskbar = await window.electronAPI.getShowInTaskbar();
+      // Get the actual current state from main process (which loads from config)
+      this.showWindowInTaskbar = await window.electronAPI.getShowInTaskbar();
       
       // Sync localStorage with the actual state
-      localStorage.setItem('showInTaskbar', this.showInTaskbar.toString());
+      localStorage.setItem('showWindowInTaskbar', this.showWindowInTaskbar.toString());
       
       // Update checkbox to match
       const checkbox = document.getElementById('show-in-taskbar-checkbox') as HTMLInputElement;
       if (checkbox) {
-        checkbox.checked = this.showInTaskbar;
+        checkbox.checked = this.showWindowInTaskbar;
       }
     }
   }
@@ -894,7 +894,7 @@ class App {
     const shaderFileInput = document.getElementById('shader-file-input') as HTMLInputElement;
 
     // Load config defaults
-    let configDefaults: { opacityPercent: number; timeScale: number; frameRate: number | null; showInTaskbar: boolean } = { opacityPercent: 10, timeScale: 1.0, frameRate: null, showInTaskbar: false };
+    let configDefaults: { opacityPercent: number; timeScale: number; frameRate: number | null; showWindowInTaskbar: boolean } = { opacityPercent: 10, timeScale: 1.0, frameRate: null, showWindowInTaskbar: false };
     if (window.electronAPI && window.electronAPI.getConfig) {
       try {
         configDefaults = await window.electronAPI.getConfig();
@@ -1073,14 +1073,14 @@ class App {
       }
     }
 
-    // Show in taskbar checkbox
+    // Show window in taskbar checkbox (controls whether overlay window appears in alt-tab)
     const showInTaskbarCheckbox = document.getElementById('show-in-taskbar-checkbox') as HTMLInputElement;
     if (showInTaskbarCheckbox) {
       showInTaskbarCheckbox.addEventListener('change', async (e) => {
         const checked = (e.target as HTMLInputElement).checked;
-        this.showInTaskbar = checked;
+        this.showWindowInTaskbar = checked;
         // Save to localStorage
-        localStorage.setItem('showInTaskbar', checked.toString());
+        localStorage.setItem('showWindowInTaskbar', checked.toString());
         if (window.electronAPI) {
           await window.electronAPI.setShowInTaskbar(checked);
         }

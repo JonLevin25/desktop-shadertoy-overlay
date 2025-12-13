@@ -24,7 +24,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveShaderFile: (code: string, fileName: string) => ipcRenderer.invoke('save-shader-file', code, fileName),
   deleteShaderFile: (filePath: string) => ipcRenderer.invoke('delete-shader-file', filePath),
   getConfig: () => ipcRenderer.invoke('get-config'),
-  updateConfig: (updates: { opacityPercent?: number; timeScale?: number; frameRate?: number | null; showInTaskbar?: boolean }) => ipcRenderer.invoke('update-config', updates),
+  updateConfig: (updates: { opacityPercent?: number; timeScale?: number; frameRate?: number | null; showWindowInTaskbar?: boolean }) => ipcRenderer.invoke('update-config', updates),
 });
 
 // Type declaration for TypeScript
@@ -45,8 +45,8 @@ declare global {
       onLoadTestShader: (callback: (filePath: string) => void) => void;
       saveShaderFile: (code: string, fileName: string) => Promise<string>;
       deleteShaderFile: (filePath: string) => Promise<boolean>;
-      getConfig: () => Promise<{ opacityPercent: number; timeScale: number; frameRate: number | null; showInTaskbar: boolean }>;
-      updateConfig: (updates: { opacityPercent?: number; timeScale?: number; frameRate?: number | null; showInTaskbar?: boolean }) => Promise<{ opacityPercent: number; timeScale: number; frameRate: number | null; showInTaskbar: boolean }>;
+      getConfig: () => Promise<{ opacityPercent: number; timeScale: number; frameRate: number | null; showWindowInTaskbar: boolean }>;
+      updateConfig: (updates: { opacityPercent?: number; timeScale?: number; frameRate?: number | null; showWindowInTaskbar?: boolean }) => Promise<{ opacityPercent: number; timeScale: number; frameRate: number | null; showWindowInTaskbar: boolean }>;
     };
   }
 }

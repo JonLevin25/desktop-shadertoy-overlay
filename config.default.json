@@ -2,5 +2,5 @@
   "opacityPercent": 10,
   "timeScale": 0.75,
   "frameRate": null,
-  "showInTaskbar": false
+  "showWindowInTaskbar": false
 }
