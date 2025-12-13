@@ -807,7 +807,7 @@ class App {
       this.updateShaderList();
     });
     
-    this.setupUI();
+    this.setupUI(); // Note: setupUI is now async but we don't await it
     this.setupElectronIPC();
     this.loadWindowOptions();
     
@@ -839,49 +839,142 @@ class App {
     }
   }
 
-  private setupUI() {
+  private async setupUI() {
     const overlayUI = document.getElementById('overlay-ui')!;
     const opacitySlider = document.getElementById('opacity-slider') as HTMLInputElement;
     const opacityValue = document.getElementById('opacity-value')!;
     const shaderList = document.getElementById('shader-list')!;
     const shaderFileInput = document.getElementById('shader-file-input') as HTMLInputElement;
 
-    // Load saved opacity
-    const savedOpacity = localStorage.getItem('opacity');
-    if (savedOpacity !== null) {
-      const opacity = parseFloat(savedOpacity);
-      opacitySlider.value = opacity.toString();
-      opacityValue.textContent = opacity + '%';
-      this.renderer.setOpacity(opacity);
+    // Load config defaults
+    let configDefaults: { opacityPercent: number; timeScale: number; frameRate: number | null; showInTaskbar: boolean } = { opacityPercent: 10, timeScale: 1.0, frameRate: null, showInTaskbar: false };
+    if (window.electronAPI && window.electronAPI.getConfig) {
+      try {
+        configDefaults = await window.electronAPI.getConfig();
+      } catch (error) {
+        console.error('Failed to load config:', error);
+      }
     }
 
-    // Opacity control
+    // Load saved opacity (prefer localStorage, fallback to config)
+    const savedOpacity = localStorage.getItem('opacity');
+    const opacity = savedOpacity !== null ? parseFloat(savedOpacity) : configDefaults.opacityPercent;
+    opacitySlider.value = opacity.toString();
+    (opacityValue as HTMLInputElement).value = opacity + '%';
+    this.renderer.setOpacity(opacity);
+    if (savedOpacity === null) {
+      localStorage.setItem('opacity', opacity.toString());
+    }
+
+    // Opacity control - slider
     opacitySlider.addEventListener('input', (e) => {
       const value = (e.target as HTMLInputElement).value;
-      opacityValue.textContent = value + '%';
+      (opacityValue as HTMLInputElement).value = value + '%';
       const opacityNum = parseFloat(value);
       this.renderer.setOpacity(opacityNum);
-      // Save to localStorage
       localStorage.setItem('opacity', opacityNum.toString());
+      // Update config
+      if (window.electronAPI && window.electronAPI.updateConfig) {
+        window.electronAPI.updateConfig({ opacityPercent: opacityNum });
+      }
     });
+
+    // Opacity control - editable text input
+    if (opacityValue instanceof HTMLInputElement) {
+      opacityValue.addEventListener('focus', () => {
+        const currentValue = parseFloat(opacityValue.value.replace('%', ''));
+        if (!isNaN(currentValue)) {
+          opacityValue.value = currentValue.toString();
+        }
+      });
+      
+      opacityValue.addEventListener('blur', () => {
+        const value = parseFloat(opacityValue.value);
+        if (!isNaN(value)) {
+          const clamped = Math.max(0, Math.min(100, value));
+          opacitySlider.value = clamped.toString();
+          opacityValue.value = clamped + '%';
+          this.renderer.setOpacity(clamped);
+          localStorage.setItem('opacity', clamped.toString());
+          // Update config
+          if (window.electronAPI && window.electronAPI.updateConfig) {
+            window.electronAPI.updateConfig({ opacityPercent: clamped });
+          }
+        } else {
+          // Restore previous value if invalid
+          const saved = localStorage.getItem('opacity');
+          const savedValue = saved ? parseFloat(saved) : configDefaults.opacityPercent;
+          opacityValue.value = savedValue + '%';
+        }
+      });
+      
+      opacityValue.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          opacityValue.blur();
+        }
+      });
+    }
 
     // Time scale control
     const timeScaleSlider = document.getElementById('time-scale-slider') as HTMLInputElement;
-    const timeScaleValue = document.getElementById('time-scale-value')!;
+    const timeScaleValue = document.getElementById('time-scale-value') as HTMLInputElement;
     if (timeScaleSlider && timeScaleValue) {
       const savedTimeScale = localStorage.getItem('timeScale');
+      // Only use localStorage if it's a valid non-zero value, otherwise use config default
+      let scale = configDefaults.timeScale;
       if (savedTimeScale !== null) {
-        const scale = parseFloat(savedTimeScale);
-        timeScaleSlider.value = scale.toString();
-        timeScaleValue.textContent = scale.toFixed(1) + 'x';
-        this.renderer.setTimeScale(scale);
+        const parsed = parseFloat(savedTimeScale);
+        if (!isNaN(parsed) && parsed > 0) {
+          scale = parsed;
+        }
+      }
+      timeScaleSlider.value = scale.toString();
+      timeScaleValue.value = scale.toFixed(2) + 'x';
+      this.renderer.setTimeScale(scale);
+      if (savedTimeScale === null) {
+        localStorage.setItem('timeScale', scale.toString());
       }
       
+      // Time scale slider
       timeScaleSlider.addEventListener('input', (e) => {
         const value = parseFloat((e.target as HTMLInputElement).value);
-        timeScaleValue.textContent = value.toFixed(1) + 'x';
+        timeScaleValue.value = value.toFixed(2) + 'x';
         this.renderer.setTimeScale(value);
         localStorage.setItem('timeScale', value.toString());
+        // Update config
+        if (window.electronAPI && window.electronAPI.updateConfig) {
+          window.electronAPI.updateConfig({ timeScale: value });
+        }
+      });
+
+      // Time scale editable text input
+      timeScaleValue.addEventListener('focus', () => {
+        const currentValue = parseFloat(timeScaleValue.value.replace('x', ''));
+        if (!isNaN(currentValue)) {
+          timeScaleValue.value = currentValue.toString();
+        }
+      });
+      
+      timeScaleValue.addEventListener('blur', () => {
+        const value = parseFloat(timeScaleValue.value);
+        if (!isNaN(value)) {
+          const clamped = Math.max(0, Math.min(5, value));
+          timeScaleSlider.value = clamped.toString();
+          timeScaleValue.value = clamped.toFixed(2) + 'x';
+          this.renderer.setTimeScale(clamped);
+          localStorage.setItem('timeScale', clamped.toString());
+        } else {
+          // Restore previous value if invalid
+          const saved = localStorage.getItem('timeScale');
+          const savedValue = saved ? parseFloat(saved) : 1.0;
+          timeScaleValue.value = savedValue.toFixed(2) + 'x';
+        }
+      });
+      
+      timeScaleValue.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          timeScaleValue.blur();
+        }
       });
     }
 
@@ -890,12 +983,16 @@ class App {
     const resetFrameRateBtn = document.getElementById('reset-frame-rate-btn');
     if (frameRateInput) {
       const savedFrameRate = localStorage.getItem('frameRate');
-      if (savedFrameRate !== null && savedFrameRate !== '') {
-        const fps = parseFloat(savedFrameRate);
-        if (!isNaN(fps) && fps > 0) {
-          frameRateInput.value = fps.toString();
-          this.renderer.setFrameRate(fps);
-        }
+      const frameRate = savedFrameRate !== null && savedFrameRate !== '' 
+        ? parseFloat(savedFrameRate) 
+        : configDefaults.frameRate;
+      
+      if (frameRate !== null && !isNaN(frameRate) && frameRate > 0) {
+        frameRateInput.value = frameRate.toString();
+        this.renderer.setFrameRate(frameRate);
+      }
+      if (savedFrameRate === null && frameRate === null) {
+        localStorage.removeItem('frameRate');
       }
       
       frameRateInput.addEventListener('input', (e) => {
@@ -903,11 +1000,19 @@ class App {
         if (value === '') {
           this.renderer.setFrameRate(null);
           localStorage.removeItem('frameRate');
+          // Update config
+          if (window.electronAPI && window.electronAPI.updateConfig) {
+            window.electronAPI.updateConfig({ frameRate: null });
+          }
         } else {
           const fps = parseFloat(value);
           if (!isNaN(fps) && fps > 0) {
             this.renderer.setFrameRate(fps);
             localStorage.setItem('frameRate', fps.toString());
+            // Update config
+            if (window.electronAPI && window.electronAPI.updateConfig) {
+              window.electronAPI.updateConfig({ frameRate: fps });
+            }
           }
         }
       });

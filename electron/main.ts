@@ -6,7 +6,8 @@ let mainWindow: BrowserWindow | null = null;
 let overlayVisible = false;
 let tray: Tray | null = null;
 let appIsQuitting = false;
-let showInTaskbar = false; // Whether window appears in taskbar/alt-tab
+let config = loadConfig(); // Load config on startup
+let showInTaskbar = config.showInTaskbar; // Whether window appears in taskbar/alt-tab
 let isClickthrough = true; // Track clickthrough state
 let testShaderPath: string | null = null; // Shader to load for testing
 
@@ -364,6 +365,7 @@ ipcMain.handle('set-show-in-taskbar', (_, show: boolean) => {
   
   showInTaskbar = show;
   savePreferences(); // Save the preference
+  saveConfig({ showInTaskbar: show });
   if (mainWindow) {
     // On Windows, setSkipTaskbar() doesn't always work reliably
     // We need to recreate the window with the correct setting
@@ -422,6 +424,90 @@ ipcMain.handle('set-show-in-taskbar', (_, show: boolean) => {
 ipcMain.handle('get-show-in-taskbar', () => {
   return showInTaskbar;
 });
+
+// Get config file path
+function getConfigPath(): string {
+  if (app.isPackaged) {
+    // In production, use userData directory
+    const userDataPath = app.getPath('userData');
+    return path.join(userDataPath, 'config.json');
+  } else {
+    // In development, use project root
+    const projectRoot = path.join(__dirname, '../../');
+    return path.join(projectRoot, 'config.json');
+  }
+}
+
+// Get default config file path
+function getDefaultConfigPath(): string {
+  if (app.isPackaged) {
+    // In production, try to find default config in app resources
+    // __dirname is dist/electron, so go up to dist/ then look for config.default.json
+    return path.join(__dirname, '../config.default.json');
+  } else {
+    // In development, use project root
+    const projectRoot = path.join(__dirname, '../../');
+    return path.join(projectRoot, 'config.default.json');
+  }
+}
+
+// Load config from file
+function loadConfig(): { opacityPercent: number; timeScale: number; frameRate: number | null; showInTaskbar: boolean } {
+  const configPath = getConfigPath();
+  const defaultConfigPath = getDefaultConfigPath();
+  const defaults = {
+    opacityPercent: 10,
+    timeScale: 1.0,
+    frameRate: null as number | null,
+    showInTaskbar: false
+  };
+  
+  try {
+    // If config.json doesn't exist, try to copy from config.default.json
+    if (!fs.existsSync(configPath)) {
+      if (fs.existsSync(defaultConfigPath)) {
+        try {
+          fs.copyFileSync(defaultConfigPath, configPath);
+          console.log('Copied config.default.json to config.json');
+        } catch (error) {
+          console.error('Failed to copy default config:', error);
+        }
+      }
+    }
+    
+    // Load config if it exists
+    if (fs.existsSync(configPath)) {
+      const configData = fs.readFileSync(configPath, 'utf-8');
+      const config = JSON.parse(configData);
+      return { ...defaults, ...config };
+    }
+  } catch (error) {
+    console.error('Failed to load config:', error);
+  }
+  
+  // Return defaults and create config file if copying failed
+  try {
+    fs.writeFileSync(configPath, JSON.stringify(defaults, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Failed to create default config:', error);
+  }
+  
+  return defaults;
+}
+
+// Save config to file
+function saveConfig(config: { opacityPercent?: number; timeScale?: number; frameRate?: number | null; showInTaskbar?: boolean }): void {
+  const configPath = getConfigPath();
+  const currentConfig = loadConfig();
+  const updatedConfig = { ...currentConfig, ...config };
+  
+  try {
+    fs.writeFileSync(configPath, JSON.stringify(updatedConfig, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Failed to save config:', error);
+    throw error;
+  }
+}
 
 // Get shaders directory path (relative to app root)
 function getShadersDirectory(): string {
@@ -653,6 +739,21 @@ ipcMain.handle('delete-shader-file', async (_, filePath: string) => {
     console.error('Failed to delete shader file:', error);
     throw error;
   }
+});
+
+// Get config
+ipcMain.handle('get-config', () => {
+  return loadConfig();
+});
+
+// Update config
+ipcMain.handle('update-config', (_, updates: { opacity?: number; timeScale?: number; frameRate?: number | null; showInTaskbar?: boolean }) => {
+  saveConfig(updates);
+  // Update local state if showInTaskbar changed
+  if (updates.showInTaskbar !== undefined) {
+    showInTaskbar = updates.showInTaskbar;
+  }
+  return loadConfig();
 });
 
 // Open file dialog for shader files
