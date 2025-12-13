@@ -58,10 +58,37 @@ function createWindow() {
   mainWindow.setIgnoreMouseEvents(true, { forward: true });
   isClickthrough = true;
   
+  // Blur window immediately after creation to prevent keyboard event capture
+  // This ensures keyboard events pass through until overlay is opened
+  // Use setTimeout to ensure this happens after window is fully initialized
+  setTimeout(() => {
+    if (mainWindow && !overlayVisible) {
+      mainWindow.blur();
+    }
+  }, 100);
+  
+  // Also blur on ready-to-show as a backup
+  mainWindow.once('ready-to-show', () => {
+    if (mainWindow && !overlayVisible) {
+      mainWindow.blur();
+    }
+  });
+  
   // Handle window focus/blur to toggle clickthrough and devtools
   mainWindow.on('focus', () => {
-    // When window is focused, disable clickthrough so user can interact
-    if (isClickthrough && !overlayVisible) {
+    // If overlay is not visible, immediately blur to prevent keyboard event interception
+    if (!overlayVisible) {
+      // Use setTimeout to avoid re-entrancy issues
+      setTimeout(() => {
+        if (mainWindow && !overlayVisible) {
+          mainWindow.blur();
+        }
+      }, 0);
+      return;
+    }
+    
+    // Overlay is visible, disable clickthrough so user can interact
+    if (isClickthrough && overlayVisible) {
       isClickthrough = false;
       mainWindow?.setIgnoreMouseEvents(false);
       console.log('Window focused, clickthrough disabled');
@@ -213,9 +240,13 @@ function toggleOverlay() {
     isClickthrough = !overlayVisible;
     mainWindow.setIgnoreMouseEvents(isClickthrough, { forward: true });
     
-    // Focus window when overlay is shown so F12 works
+    // Focus window when overlay is shown so F12 works and keyboard events are captured
+    // Blur window when overlay is hidden to prevent keyboard event interception
     if (overlayVisible) {
       mainWindow.focus();
+    } else {
+      // Blur window when overlay is hidden to prevent keyboard event capture
+      mainWindow.blur();
     }
     
     // When overlay UI is visible, ensure window is at full opacity so UI is readable
