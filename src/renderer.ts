@@ -494,6 +494,12 @@ class ShaderManager {
     
     if (!window.electronAPI) {
       console.error('electronAPI not available after waiting');
+      // If no shader is loaded (e.g., saved shader was a file shader), load default
+      if (!this.currentShaderId) {
+        console.log('No shader loaded, falling back to default shader');
+        this.currentShaderId = 'default';
+        this.renderer.loadShader(this.shaders.get('default')!.code, 'Default Rainbow');
+      }
       return;
     }
     
@@ -505,6 +511,20 @@ class ShaderManager {
     this.setupShaderDirectoryWatcher();
     console.log('Total shaders loaded:', this.shaders.size);
     console.log('Shader IDs:', Array.from(this.shaders.keys()));
+    
+    // Final fallback: if no shader is loaded after directory load (e.g., saved shader was deleted), load default
+    if (!this.currentShaderId && this.shaders.size > 0) {
+      const defaultShader = this.shaders.get('default');
+      if (defaultShader) {
+        console.log('No shader selected after directory load, falling back to default');
+        await this.selectShader('default');
+      } else {
+        // No default shader available, select first available
+        const firstShader = Array.from(this.shaders.keys())[0];
+        console.log('No default shader, selecting first available:', firstShader);
+        await this.selectShader(firstShader);
+      }
+    }
   }
 
   private loadDefaultShaders() {
@@ -527,6 +547,23 @@ class ShaderManager {
       }
     `, 'Plasma');
 
+    // Check if there's a saved shader ID
+    const lastShaderId = localStorage.getItem('lastShaderId');
+    if (lastShaderId) {
+      // If saved shader is a file shader, don't load anything yet - wait for directory load
+      if (lastShaderId.startsWith('file-')) {
+        // File shader will be loaded after directory shaders are loaded
+        // Don't load any shader now to avoid the visual hiccup
+        return;
+      }
+      // Saved shader is a default shader, restore it now
+      if (this.shaders.has(lastShaderId)) {
+        this.currentShaderId = lastShaderId;
+        this.renderer.loadShader(this.shaders.get(lastShaderId)!.code, this.shaders.get(lastShaderId)!.name);
+        return;
+      }
+    }
+    // No saved shader or saved shader doesn't exist, use default
     this.currentShaderId = 'default';
     this.renderer.loadShader(this.shaders.get('default')!.code, 'Default Rainbow');
   }
@@ -726,8 +763,16 @@ class ShaderManager {
           this.notifyShaderListChanged();
         }
         
-        // Select first shader if none selected
-        if (!this.currentShaderId && this.shaders.size > 0) {
+        // Try to restore last selected shader after directory shaders are loaded
+        const lastShaderId = localStorage.getItem('lastShaderId');
+        if (lastShaderId && this.shaders.has(lastShaderId)) {
+          // Restore saved shader (file shader or default that wasn't loaded yet)
+          if (this.currentShaderId !== lastShaderId) {
+            console.log('Restoring last selected shader:', lastShaderId);
+            await this.selectShader(lastShaderId);
+          }
+        } else if (!this.currentShaderId && this.shaders.size > 0) {
+          // No saved shader or saved shader doesn't exist, select first available
           const firstShader = Array.from(this.shaders.keys())[0];
           console.log('Auto-selecting first available shader:', firstShader);
           await this.selectShader(firstShader);
@@ -754,6 +799,8 @@ class ShaderManager {
     const shader = this.shaders.get(id);
     if (shader) {
       this.currentShaderId = id;
+      // Save selected shader ID to localStorage for persistence
+      localStorage.setItem('lastShaderId', id);
       const success = await this.renderer.loadShader(shader.code, shader.name);
       this.notifyShaderListChanged();
       return success;
