@@ -466,8 +466,10 @@ ipcMain.handle('read-shader-file', (_, filePath: string) => {
   }
 });
 
-// Fetch shader from Shadertoy (main process can bypass CORS)
-ipcMain.handle('fetch-shadertoy-shader', async (_, url: string) => {
+// Removed Shadertoy URL loading feature
+
+// Fetch shader from Shadertoy (main process can bypass CORS) - REMOVED
+/*ipcMain.handle('fetch-shadertoy-shader', async (_, url: string) => {
   try {
     // Extract shader ID from URL
     const match = url.match(/shadertoy\.com\/view\/([A-Za-z0-9]+)/);
@@ -617,7 +619,7 @@ ipcMain.handle('fetch-shadertoy-shader', async (_, url: string) => {
     console.error('Error in fetch-shadertoy-shader:', error);
     throw error;
   }
-});
+});*/
 
 // Save shader to file
 ipcMain.handle('save-shader-file', async (_, shaderCode: string, fileName: string) => {

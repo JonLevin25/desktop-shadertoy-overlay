@@ -248,6 +248,30 @@
     </div>
 
     <div class="controls-section">
+      <h2>Time & Performance</h2>
+      <div class="input-group">
+        <label>Time Scale</label>
+        <div class="opacity-control">
+          <input type="range" id="time-scale-slider" min="0" max="5" value="1" step="0.1">
+          <span class="opacity-value" id="time-scale-value">1.0x</span>
+        </div>
+        <p style="font-size: 12px; color: #aaa; margin-top: 5px;">
+          Speed multiplier for shader time (1.0 = normal speed)
+        </p>
+      </div>
+      <div class="input-group">
+        <label>Target Frame Rate (FPS)</label>
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <input type="number" id="frame-rate-input" min="1" max="240" value="" placeholder="Unlimited" style="flex: 1;">
+          <button class="button button-secondary" id="reset-frame-rate-btn">Reset</button>
+        </div>
+        <p style="font-size: 12px; color: #aaa; margin-top: 5px;">
+          Limit frame rate (leave empty for unlimited)
+        </p>
+      </div>
+    </div>
+
+    <div class="controls-section">
       <h2>Window Options</h2>
       <div style="display: flex; align-items: center; gap: 10px;">
         <input type="checkbox" id="show-in-taskbar-checkbox" style="width: auto;">
@@ -266,12 +290,6 @@
         <!-- Shader items will be populated here -->
       </div>
       
-      <div class="input-group">
-        <label>Load from Shadertoy URL</label>
-        <input type="text" id="shadertoy-url" placeholder="https://www.shadertoy.com/view/...">
-        <button class="button" id="load-shadertoy-btn" style="margin-top: 10px;">Load Shader</button>
-      </div>
-
       <div class="input-group">
         <label>Load from Local File</label>
         <button class="button" id="load-file-btn" style="margin-bottom: 10px;">Browse Shader File...</button>

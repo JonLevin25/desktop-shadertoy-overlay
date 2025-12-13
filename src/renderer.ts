@@ -9,6 +9,10 @@ class ShaderRenderer {
   private opacity: number = 1.0;
   private resolution: [number, number] = [1920, 1080];
   private dummyTexture: WebGLTexture | null = null;
+  private timeScale: number = 1.0; // Time multiplier (1.0 = normal speed)
+  private frameRate: number | null = null; // Target framerate (null = unlimited)
+  private frameCount: number = 0;
+  private lastRenderTime: number = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     console.log('ShaderRenderer: Initializing...', canvas);
@@ -45,6 +49,7 @@ class ShaderRenderer {
     this.gl = gl;
     this.startTime = performance.now() / 1000.0;
     this.lastFrameTime = this.startTime;
+    this.lastRenderTime = this.startTime;
     this.createDummyTextures();
 
     // Set up canvas
@@ -149,8 +154,13 @@ class ShaderRenderer {
     const uniforms = `
       uniform float iTime;
       uniform float iTimeDelta;
+      uniform float iFrameRate;
+      uniform int iFrame;
+      uniform float iChannelTime[4];
       uniform vec3 iResolution;
       uniform vec4 iMouse;
+      uniform vec4 iDate;
+      uniform float iSampleRate;
       uniform sampler2D iChannel0;
       uniform sampler2D iChannel1;
       uniform sampler2D iChannel2;
@@ -260,14 +270,33 @@ class ShaderRenderer {
     }
   }
 
+  setTimeScale(scale: number) {
+    this.timeScale = scale;
+  }
+
+  setFrameRate(fps: number | null) {
+    this.frameRate = fps;
+  }
+
   private render() {
     if (!this.gl || !this.program) return;
 
     const gl = this.gl;
     const currentTime = performance.now() / 1000.0;
-    const time = currentTime - this.startTime;
-    const timeDelta = currentTime - this.lastFrameTime;
+    const rawTime = currentTime - this.startTime;
+    const rawTimeDelta = currentTime - this.lastFrameTime;
     this.lastFrameTime = currentTime;
+    
+    // Apply time scale
+    const time = rawTime * this.timeScale;
+    const timeDelta = rawTimeDelta * this.timeScale;
+    
+    // Calculate frame rate
+    const actualFrameRate = rawTimeDelta > 0 ? 1.0 / rawTimeDelta : 0;
+    const targetFrameRate = this.frameRate || actualFrameRate;
+    
+    // Increment frame count
+    this.frameCount++;
 
     // Set up fullscreen quad
     const positionBuffer = gl.createBuffer();
@@ -297,8 +326,13 @@ class ShaderRenderer {
     // Set uniforms
     const iTimeLocation = gl.getUniformLocation(this.program, 'iTime');
     const iTimeDeltaLocation = gl.getUniformLocation(this.program, 'iTimeDelta');
+    const iFrameRateLocation = gl.getUniformLocation(this.program, 'iFrameRate');
+    const iFrameLocation = gl.getUniformLocation(this.program, 'iFrame');
+    const iChannelTimeLocation = gl.getUniformLocation(this.program, 'iChannelTime');
     const iResolutionLocation = gl.getUniformLocation(this.program, 'iResolution');
     const iMouseLocation = gl.getUniformLocation(this.program, 'iMouse');
+    const iDateLocation = gl.getUniformLocation(this.program, 'iDate');
+    const iSampleRateLocation = gl.getUniformLocation(this.program, 'iSampleRate');
     const iChannel0Location = gl.getUniformLocation(this.program, 'iChannel0');
     const iChannel1Location = gl.getUniformLocation(this.program, 'iChannel1');
     const iChannel2Location = gl.getUniformLocation(this.program, 'iChannel2');
@@ -311,11 +345,34 @@ class ShaderRenderer {
     if (iTimeDeltaLocation !== null) {
       gl.uniform1f(iTimeDeltaLocation, timeDelta);
     }
+    if (iFrameRateLocation !== null) {
+      gl.uniform1f(iFrameRateLocation, targetFrameRate);
+    }
+    if (iFrameLocation !== null) {
+      gl.uniform1i(iFrameLocation, this.frameCount);
+    }
+    if (iChannelTimeLocation !== null) {
+      // Set all channels to the same time (scaled)
+      const channelTimes = [time, time, time, time];
+      gl.uniform1fv(iChannelTimeLocation, channelTimes);
+    }
     if (iResolutionLocation !== null) {
       gl.uniform3f(iResolutionLocation, this.resolution[0], this.resolution[1], 1.0);
     }
     if (iMouseLocation !== null) {
       gl.uniform4f(iMouseLocation, 0, 0, 0, 0); // No mouse input for now
+    }
+    if (iDateLocation !== null) {
+      // iDate: (year, month, day, time in seconds)
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.getMonth() + 1; // 1-12
+      const day = now.getDate();
+      const seconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds() + now.getMilliseconds() / 1000;
+      gl.uniform4f(iDateLocation, year, month, day, seconds);
+    }
+    if (iSampleRateLocation !== null) {
+      gl.uniform1f(iSampleRateLocation, 44100.0); // Standard audio sample rate
     }
     
     // Bind dummy textures for iChannel0-3 (black texture)
@@ -378,8 +435,23 @@ class ShaderRenderer {
     // Clean up
     gl.deleteBuffer(positionBuffer);
 
-    // Continue animation
-    this.animationFrameId = requestAnimationFrame(() => this.render());
+    // Continue animation with frame rate limiting if set
+    if (this.frameRate && this.frameRate > 0) {
+      const targetFrameTime = 1000.0 / this.frameRate;
+      const elapsed = (currentTime - this.lastRenderTime) * 1000;
+      this.lastRenderTime = currentTime;
+      const delay = Math.max(0, targetFrameTime - elapsed);
+      if (delay > 0) {
+        setTimeout(() => {
+          this.animationFrameId = requestAnimationFrame(() => this.render());
+        }, delay);
+      } else {
+        this.animationFrameId = requestAnimationFrame(() => this.render());
+      }
+    } else {
+      this.lastRenderTime = currentTime;
+      this.animationFrameId = requestAnimationFrame(() => this.render());
+    }
   }
 
   destroy() {
@@ -397,7 +469,7 @@ class ShaderRenderer {
 
 // Shader Manager
 class ShaderManager {
-  private shaders: Map<string, { code: string; name: string; source: 'local' | 'shadertoy' }> = new Map();
+  private shaders: Map<string, { code: string; name: string; source: 'local' }> = new Map();
   private currentShaderId: string | null = null;
   private renderer: ShaderRenderer;
   private onShaderListChanged: (() => void) | null = null;
@@ -443,7 +515,7 @@ class ShaderManager {
         vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0, 2, 4));
         fragColor = vec4(col, 1.0);
       }
-    `, 'Default Rainbow', 'local');
+    `, 'Default Rainbow');
 
     this.addShader('plasma', `
       void mainImage(out vec4 fragColor, in vec2 fragCoord) {
@@ -453,41 +525,15 @@ class ShaderManager {
         col += sin(atan(uv.y, uv.x) * 5.0 + iTime) * 0.3;
         fragColor = vec4(col * 0.5, col * 0.7, col, 1.0);
       }
-    `, 'Plasma', 'local');
+    `, 'Plasma');
 
     this.currentShaderId = 'default';
     this.renderer.loadShader(this.shaders.get('default')!.code, 'Default Rainbow');
   }
 
-  addShader(id: string, code: string, name: string, source: 'local' | 'shadertoy') {
-    this.shaders.set(id, { code, name, source });
+  addShader(id: string, code: string, name: string) {
+    this.shaders.set(id, { code, name, source: 'local' });
     this.notifyShaderListChanged();
-  }
-
-  async loadFromShadertoy(url: string): Promise<boolean> {
-    try {
-      if (!window.electronAPI || !window.electronAPI.fetchShadertoyShader) {
-        throw new Error('fetchShadertoyShader not available');
-      }
-      
-      console.log('Fetching shader from Shadertoy:', url);
-      const result = await window.electronAPI.fetchShadertoyShader(url);
-      
-      if (!result || !result.code) {
-        throw new Error('Failed to extract shader code from Shadertoy');
-      }
-      
-      // Extract shader ID from URL for unique ID
-      const match = url.match(/shadertoy\.com\/view\/([A-Za-z0-9]+)/);
-      const shaderId = match ? match[1] : Date.now().toString();
-      
-      console.log('Shader loaded from Shadertoy:', result.name);
-      this.addShader(`shadertoy-${shaderId}`, result.code, result.name, 'shadertoy');
-      return true;
-    } catch (error) {
-      console.error('Failed to load from Shadertoy:', error);
-      return false;
-    }
   }
   
   async downloadShaderToFile(shaderId: string): Promise<boolean> {
@@ -567,7 +613,7 @@ class ShaderManager {
       const id = `file-${Date.now()}`;
       const name = file.name.replace(/\.[^/.]+$/, '');
       
-      this.addShader(id, code, name, 'local');
+      this.addShader(id, code, name);
       return true;
     } catch (error) {
       console.error('Failed to load file:', error);
@@ -601,7 +647,7 @@ class ShaderManager {
       const id = `file-${filePath}`;
       
       console.log('Adding shader:', name, 'with ID:', id);
-      this.addShader(id, code, name, 'local');
+      this.addShader(id, code, name);
       console.log('Shader added successfully, total shaders:', this.shaders.size);
       
       // Auto-select if this is the first shader loaded
@@ -636,7 +682,7 @@ class ShaderManager {
         
         // Track which shaders are from directory
         for (const [id, shader] of this.shaders.entries()) {
-          if (id.startsWith('file-') && !id.includes('shadertoy-')) {
+          if (id.startsWith('file-')) {
             // Check if this shader file still exists
             const filePath = id.replace('file-', '');
             if (!shaderFiles.includes(filePath)) {
@@ -669,7 +715,7 @@ class ShaderManager {
         
         // Remove deleted shaders
         const removedShader = Array.from(this.shaders.keys()).some(id => {
-          if (id.startsWith('file-') && !id.includes('shadertoy-')) {
+          if (id.startsWith('file-')) {
             const filePath = id.replace('file-', '');
             return !shaderFiles.includes(filePath);
           }
@@ -798,8 +844,6 @@ class App {
     const opacitySlider = document.getElementById('opacity-slider') as HTMLInputElement;
     const opacityValue = document.getElementById('opacity-value')!;
     const shaderList = document.getElementById('shader-list')!;
-    const shadertoyUrlInput = document.getElementById('shadertoy-url') as HTMLInputElement;
-    const loadShadertoyBtn = document.getElementById('load-shadertoy-btn')!;
     const shaderFileInput = document.getElementById('shader-file-input') as HTMLInputElement;
 
     // Load saved opacity
@@ -820,6 +864,62 @@ class App {
       // Save to localStorage
       localStorage.setItem('opacity', opacityNum.toString());
     });
+
+    // Time scale control
+    const timeScaleSlider = document.getElementById('time-scale-slider') as HTMLInputElement;
+    const timeScaleValue = document.getElementById('time-scale-value')!;
+    if (timeScaleSlider && timeScaleValue) {
+      const savedTimeScale = localStorage.getItem('timeScale');
+      if (savedTimeScale !== null) {
+        const scale = parseFloat(savedTimeScale);
+        timeScaleSlider.value = scale.toString();
+        timeScaleValue.textContent = scale.toFixed(1) + 'x';
+        this.renderer.setTimeScale(scale);
+      }
+      
+      timeScaleSlider.addEventListener('input', (e) => {
+        const value = parseFloat((e.target as HTMLInputElement).value);
+        timeScaleValue.textContent = value.toFixed(1) + 'x';
+        this.renderer.setTimeScale(value);
+        localStorage.setItem('timeScale', value.toString());
+      });
+    }
+
+    // Frame rate control
+    const frameRateInput = document.getElementById('frame-rate-input') as HTMLInputElement;
+    const resetFrameRateBtn = document.getElementById('reset-frame-rate-btn');
+    if (frameRateInput) {
+      const savedFrameRate = localStorage.getItem('frameRate');
+      if (savedFrameRate !== null && savedFrameRate !== '') {
+        const fps = parseFloat(savedFrameRate);
+        if (!isNaN(fps) && fps > 0) {
+          frameRateInput.value = fps.toString();
+          this.renderer.setFrameRate(fps);
+        }
+      }
+      
+      frameRateInput.addEventListener('input', (e) => {
+        const value = (e.target as HTMLInputElement).value;
+        if (value === '') {
+          this.renderer.setFrameRate(null);
+          localStorage.removeItem('frameRate');
+        } else {
+          const fps = parseFloat(value);
+          if (!isNaN(fps) && fps > 0) {
+            this.renderer.setFrameRate(fps);
+            localStorage.setItem('frameRate', fps.toString());
+          }
+        }
+      });
+      
+      if (resetFrameRateBtn) {
+        resetFrameRateBtn.addEventListener('click', () => {
+          frameRateInput.value = '';
+          this.renderer.setFrameRate(null);
+          localStorage.removeItem('frameRate');
+        });
+      }
+    }
 
     // Show in taskbar checkbox
     const showInTaskbarCheckbox = document.getElementById('show-in-taskbar-checkbox') as HTMLInputElement;
@@ -844,29 +944,6 @@ class App {
         }
       });
     }
-
-    // Load from Shadertoy
-    loadShadertoyBtn.addEventListener('click', async () => {
-      const url = shadertoyUrlInput.value.trim();
-      if (!url) return;
-
-      loadShadertoyBtn.textContent = 'Loading...';
-      const success = await this.shaderManager.loadFromShadertoy(url);
-      
-      if (success) {
-        shadertoyUrlInput.value = '';
-        this.updateShaderList();
-        // Auto-select the newly loaded shader
-        const shaders = this.shaderManager.getShaders();
-        const newShader = shaders[shaders.length - 1];
-        await this.shaderManager.selectShader(newShader.id);
-        this.updateShaderList();
-      } else {
-        alert('Failed to load shader from Shadertoy. Make sure the URL is correct.');
-      }
-      
-      loadShadertoyBtn.textContent = 'Load Shader';
-    });
 
     // Load from file - use Electron dialog
     const loadFileBtn = document.getElementById('load-file-btn');
@@ -936,20 +1013,17 @@ class App {
 
     shaderList.innerHTML = shaders.map(({ id, name, source }) => {
       const isActive = id === currentId;
-      const sourceBadge = source === 'shadertoy' ? '🌐' : '📁';
       // Escape HTML in name to prevent XSS
       const escapedName = name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       const isLocalFile = id.startsWith('file-');
-      const isShadertoy = id.startsWith('shadertoy-');
       
       return `
         <div class="shader-item ${isActive ? 'active' : ''}" data-shader-id="${id}">
           <div class="shader-item-actions">
-            ${isShadertoy ? `<button class="shader-item-action download" data-shader-id="${id}" title="Download to local file">💾</button>` : ''}
             ${isLocalFile ? `<button class="shader-item-action delete" data-shader-id="${id}" title="Delete shader">✕</button>` : ''}
           </div>
-          <h3>${sourceBadge} ${escapedName}</h3>
-          <p>${source === 'shadertoy' ? 'From Shadertoy' : 'Local file'}</p>
+          <h3>📁 ${escapedName}</h3>
+          <p>Local file</p>
         </div>
       `;
     }).join('');
@@ -969,23 +1043,6 @@ class App {
             this.updateShaderList();
           } else {
             console.error('Failed to select shader:', shaderId);
-          }
-        }
-      });
-    });
-    
-    // Add download button handlers
-    shaderList.querySelectorAll('.shader-item-action.download').forEach((btn) => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const shaderId = (btn as HTMLElement).dataset.shaderId;
-        if (shaderId) {
-          const success = await this.shaderManager.downloadShaderToFile(shaderId);
-          if (success) {
-            alert('Shader downloaded successfully!');
-            this.updateShaderList();
-          } else {
-            alert('Failed to download shader.');
           }
         }
       });
