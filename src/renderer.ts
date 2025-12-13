@@ -1026,6 +1026,10 @@ class App {
           timeScaleValue.value = clamped.toFixed(2) + 'x';
           this.renderer.setTimeScale(clamped);
           localStorage.setItem('timeScale', clamped.toString());
+          // Update config to persist
+          if (window.electronAPI && window.electronAPI.updateConfig) {
+            window.electronAPI.updateConfig({ timeScale: clamped });
+          }
         } else {
           // Restore previous value if invalid
           const saved = localStorage.getItem('timeScale');
@@ -1085,6 +1089,10 @@ class App {
           frameRateInput.value = '';
           this.renderer.setFrameRate(null);
           localStorage.removeItem('frameRate');
+          // Update config to persist the reset
+          if (window.electronAPI && window.electronAPI.updateConfig) {
+            window.electronAPI.updateConfig({ frameRate: null });
+          }
         });
       }
     }
