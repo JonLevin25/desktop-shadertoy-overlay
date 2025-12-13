@@ -843,6 +843,7 @@ class App {
   private shaderManager: ShaderManager;
   private overlayVisible = false;
   private showWindowInTaskbar = false;
+  private showSettingsOnWindowFocused = false;
 
   constructor() {
     const canvas = document.getElementById('canvas') as HTMLCanvasElement;
@@ -872,17 +873,32 @@ class App {
 
   private async loadWindowOptions() {
     if (window.electronAPI) {
-      // Get the actual current state from main process (which loads from config)
-      this.showWindowInTaskbar = await window.electronAPI.getShowInTaskbar();
+      // Get the full config from main process
+      const config = await window.electronAPI.getConfig();
+      this.showWindowInTaskbar = config.showWindowInTaskbar;
+      this.showSettingsOnWindowFocused = config.showSettingsOnWindowFocused;
       
-      // Sync localStorage with the actual state
-      localStorage.setItem('showWindowInTaskbar', this.showWindowInTaskbar.toString());
-      
-      // Update checkbox to match
-      const checkbox = document.getElementById('show-in-taskbar-checkbox') as HTMLInputElement;
-      if (checkbox) {
-        checkbox.checked = this.showWindowInTaskbar;
+      // Update show in taskbar checkbox
+      const taskbarCheckbox = document.getElementById('show-in-taskbar-checkbox') as HTMLInputElement;
+      if (taskbarCheckbox) {
+        taskbarCheckbox.checked = this.showWindowInTaskbar;
       }
+      
+      // Update show settings on focus checkbox
+      const settingsOnFocusCheckbox = document.getElementById('show-settings-on-focus-checkbox') as HTMLInputElement;
+      if (settingsOnFocusCheckbox) {
+        settingsOnFocusCheckbox.checked = this.showSettingsOnWindowFocused;
+      }
+      
+      // Show/hide the settings on focus option based on taskbar setting
+      this.updateSettingsOnFocusVisibility();
+    }
+  }
+  
+  private updateSettingsOnFocusVisibility() {
+    const container = document.getElementById('settings-on-focus-container');
+    if (container) {
+      container.style.display = this.showWindowInTaskbar ? 'block' : 'none';
     }
   }
 
@@ -894,7 +910,7 @@ class App {
     const shaderFileInput = document.getElementById('shader-file-input') as HTMLInputElement;
 
     // Load config defaults
-    let configDefaults: { opacityPercent: number; timeScale: number; frameRate: number | null; showWindowInTaskbar: boolean } = { opacityPercent: 10, timeScale: 1.0, frameRate: null, showWindowInTaskbar: false };
+    let configDefaults: { opacityPercent: number; timeScale: number; frameRate: number | null; showWindowInTaskbar: boolean; showSettingsOnWindowFocused: boolean } = { opacityPercent: 10, timeScale: 1.0, frameRate: null, showWindowInTaskbar: false, showSettingsOnWindowFocused: false };
     if (window.electronAPI && window.electronAPI.getConfig) {
       try {
         configDefaults = await window.electronAPI.getConfig();
@@ -1079,10 +1095,33 @@ class App {
       showInTaskbarCheckbox.addEventListener('change', async (e) => {
         const checked = (e.target as HTMLInputElement).checked;
         this.showWindowInTaskbar = checked;
-        // Save to localStorage
-        localStorage.setItem('showWindowInTaskbar', checked.toString());
+        // Update visibility of dependent option
+        this.updateSettingsOnFocusVisibility();
+        // If disabling taskbar mode, also disable the dependent setting
+        if (!checked && this.showSettingsOnWindowFocused) {
+          this.showSettingsOnWindowFocused = false;
+          const settingsOnFocusCheckbox = document.getElementById('show-settings-on-focus-checkbox') as HTMLInputElement;
+          if (settingsOnFocusCheckbox) {
+            settingsOnFocusCheckbox.checked = false;
+          }
+          if (window.electronAPI) {
+            await window.electronAPI.updateConfig({ showSettingsOnWindowFocused: false });
+          }
+        }
         if (window.electronAPI) {
           await window.electronAPI.setShowInTaskbar(checked);
+        }
+      });
+    }
+    
+    // Show settings on window focus checkbox
+    const showSettingsOnFocusCheckbox = document.getElementById('show-settings-on-focus-checkbox') as HTMLInputElement;
+    if (showSettingsOnFocusCheckbox) {
+      showSettingsOnFocusCheckbox.addEventListener('change', async (e) => {
+        const checked = (e.target as HTMLInputElement).checked;
+        this.showSettingsOnWindowFocused = checked;
+        if (window.electronAPI) {
+          await window.electronAPI.updateConfig({ showSettingsOnWindowFocused: checked });
         }
       });
     }

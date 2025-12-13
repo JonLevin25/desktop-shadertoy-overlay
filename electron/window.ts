@@ -77,22 +77,53 @@ export function createMainWindow(testShaderPath: string | null): BrowserWindow {
   isClickthrough = true;
 
   // Blur window after creation to prevent keyboard event capture
-  setTimeout(() => {
-    if (mainWindow && !overlayVisible) {
-      mainWindow.blur();
-    }
-  }, 100);
+  // (only when not in taskbar mode - taskbar mode needs focus for Alt+F4)
+  const initialConfig = getConfig();
+  if (!initialConfig.showWindowInTaskbar) {
+    setTimeout(() => {
+      if (mainWindow && !overlayVisible) {
+        mainWindow.blur();
+      }
+    }, 100);
 
-  mainWindow.once('ready-to-show', () => {
-    if (mainWindow && !overlayVisible) {
-      mainWindow.blur();
-    }
-  });
+    mainWindow.once('ready-to-show', () => {
+      if (mainWindow && !overlayVisible) {
+        mainWindow.blur();
+      }
+    });
+  }
 
   // Handle window focus
   mainWindow.on('focus', () => {
+    const config = getConfig();
+    
+    // If showWindowInTaskbar and showSettingsOnWindowFocused are both enabled,
+    // automatically show the overlay when window is focused
+    if (config.showWindowInTaskbar && config.showSettingsOnWindowFocused && !overlayVisible) {
+      // Show the overlay automatically
+      overlayVisible = true;
+      isClickthrough = false;
+      mainWindow?.setIgnoreMouseEvents(false);
+      mainWindow?.setOpacity(1.0);
+      mainWindow?.webContents.send('toggle-overlay', true);
+      console.log('Window focused, auto-showing settings overlay');
+      return;
+    }
+    
+    // When showWindowInTaskbar is enabled, allow window to maintain focus
+    // so Alt+F4 and other keyboard shortcuts work
+    if (config.showWindowInTaskbar) {
+      // Disable clickthrough when focused so we can receive keyboard events
+      if (isClickthrough) {
+        isClickthrough = false;
+        mainWindow?.setIgnoreMouseEvents(false);
+        console.log('Window focused (taskbar mode), clickthrough disabled for keyboard input');
+      }
+      return;
+    }
+    
     if (!overlayVisible) {
-      // Blur immediately if overlay is not visible
+      // Blur immediately if overlay is not visible (non-taskbar mode)
       setTimeout(() => {
         if (mainWindow && !overlayVisible) {
           mainWindow.blur();

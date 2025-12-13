@@ -11,6 +11,8 @@ export interface AppConfig {
   frameRate: number | null;
   /** Whether to show the overlay window in the taskbar/alt-tab (not the tray icon) */
   showWindowInTaskbar: boolean;
+  /** When true, automatically show settings overlay when window is focused (only applies when showWindowInTaskbar is true) */
+  showSettingsOnWindowFocused: boolean;
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -18,6 +20,7 @@ const DEFAULT_CONFIG: AppConfig = {
   timeScale: 1.0,
   frameRate: null,
   showWindowInTaskbar: false,
+  showSettingsOnWindowFocused: false,
 };
 
 // Cached config instance
